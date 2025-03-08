@@ -163,6 +163,18 @@ if __name__ == "__main__":
             }
         },
         {
+            'name': 'BOM Sydney Airport (2010-2020) Default TimeZone',
+            'params': {
+                'stationID': '066037',
+                'dataType': 'BOM',
+                'timeZone': None,  # Test default behavior
+                'yearStart': 2010,
+                'yearEnd': 2020,
+                'interval': 60,
+                'verbose': True
+            }
+        },
+        {
             'name': 'NOAA New York (2010-2020)',
             'params': {
                 'stationID': '72503014732',
@@ -180,6 +192,18 @@ if __name__ == "__main__":
                 'stationID': '72503014732',
                 'dataType': 'NOAA',
                 'timeZone': 'UTC',
+                'yearStart': 2010,
+                'yearEnd': 2020,
+                'interval': 60,
+                'verbose': True
+            }
+        },
+        {
+            'name': 'NOAA New York (2010-2020) Default TimeZone',
+            'params': {
+                'stationID': '72503014732',
+                'dataType': 'NOAA',
+                'timeZone': None,  # Test default behavior
                 'yearStart': 2010,
                 'yearEnd': 2020,
                 'interval': 60,
