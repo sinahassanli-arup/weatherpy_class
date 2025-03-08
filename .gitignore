@@ -38,4 +38,11 @@ ENV/
 Thumbs.db
 
 # Project specific
-.weatherpy/ 
+.weatherpy/
+.pytest_cache/
+
+# Temporary and cache files
+weatherpy_legacy/data/tmp/
+weatherpy/data/tmp/
+**/tmp/
+**/.cache/ 
