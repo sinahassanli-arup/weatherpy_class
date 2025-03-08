@@ -15,7 +15,7 @@ import traceback
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import legacy weatherpy
-import weatherpy_legacy.data.initialization as wp_legacy
+from weatherpy_legacy.data.initialization import import_data as legacy_import_data
 
 # Import new weatherpy
 from weatherpy.data.wd_importer import BOMWeatherDataImporter, NOAAWeatherDataImporter
@@ -106,7 +106,7 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
         # Time the legacy method
         start_time = time.time()
         # Legacy method
-        data_legacy, yearStart_legacy, yearEnd_legacy = wp_legacy.import_data(
+        data_legacy, yearStart_legacy, yearEnd_legacy = legacy_import_data(
             stationID,
             dataType,
             timeZone,
