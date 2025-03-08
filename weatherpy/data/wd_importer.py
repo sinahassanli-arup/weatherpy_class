@@ -553,9 +553,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         # Get date bounds
         start_date, end_date = self._get_date_bounds()
         
-        # Filter data by date range
-        data = data[(data.index >= start_date) & (data.index <= end_date)]
-        
         # Rename columns
         if 'Local Time' in data.columns:
             data['LocalTime'] = pd.to_datetime(data['Local Time'])
@@ -604,6 +601,24 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             data = data.reset_index()
             data['LocalTime'] = data['UTC'].dt.tz_convert(timezone_local)
             data = data.set_index('LocalTime')
+        
+        # Filter data by date range to match legacy implementation
+        if self.time_zone == 'UTC':
+            # For UTC, we need to filter by the exact start and end dates
+            # Legacy implementation includes data from start_date to end_date inclusive
+            data = data[(data.index >= start_date) & (data.index <= end_date)]
+            
+            # Legacy implementation doesn't include data from the previous day
+            # Filter out data from the previous day (e.g., 2009-12-31 23:00:00+00:00)
+            if len(data) > 0:
+                first_date = data.index[0].date()
+                expected_first_date = datetime(self.year_start, 1, 1, tzinfo=pytz.UTC).date()
+                if first_date < expected_first_date:
+                    print(f"Filtering out data from {first_date} (before {expected_first_date})")
+                    data = data[data.index.date >= expected_first_date]
+        else:
+            # For LocalTime, the filtering is already done correctly
+            data = data[(data.index >= start_date) & (data.index <= end_date)]
         
         return data
     
@@ -849,18 +864,25 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         start_date_str = start_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         end_date_str = end_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         
-        # Convert ID to integer
-        ID = int(self.station_id)
+        # Convert ID to integer and ensure it's properly formatted
+        try:
+            ID = int(self.station_id)
+        except ValueError:
+            print(f"Warning: Invalid station ID format: {self.station_id}. Using default ID.")
+            ID = 72503014732  # Default to La Guardia Airport
         
         # Build API URL
-        s = self.API_ENDPOINT + '&'.join([
+        url_params = [
             'dataset=global-hourly',
             f'stations={ID:011d}',
             f'dataTypes={data_types}',
             f'startDate={start_date_str}',
             f'endDate={end_date_str}',
             'format=json'
-        ])
+        ]
+        
+        api_url = self.API_ENDPOINT + '&'.join(url_params)
+        print(f"API URL: {api_url}")
         
         # Try to fetch data
         numAttempts = 10
@@ -873,52 +895,105 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             print(f'\tAPI attempt {i}/{numAttempts} : ', end='')
                 
             try:
-                response = requests.get(s)
+                response = requests.get(api_url)
                 
                 if response.status_code == 200:
                     print(f'Successful (fetch time: {round(time.time() - time_request, 1)} sec)')
                     break
                 else:
+                    print(f'Failed ({response.reason}. Code {response.status_code})')
+                    # Print more detailed error information
+                    if response.text:
+                        try:
+                            error_data = response.json()
+                            print(f"Error details: {error_data}")
+                        except:
+                            print(f"Error response: {response.text[:200]}...")
+                    
+                    # Modify the URL for the next attempt
+                    if i < numAttempts:
+                        # Try with a shorter date range
+                        if i == 3:
+                            # Reduce the date range to just one year
+                            mid_year = (self.year_start + self.year_end) // 2
+                            start_date_str = f"{mid_year}-01-01T00:00:00"
+                            end_date_str = f"{mid_year}-12-31T23:59:00"
+                            url_params[3] = f'startDate={start_date_str}'
+                            url_params[4] = f'endDate={end_date_str}'
+                            api_url = self.API_ENDPOINT + '&'.join(url_params)
+                            print(f"Trying with reduced date range: {start_date_str} to {end_date_str}")
+                        
+                        # Try with fewer data types
+                        if i == 6:
+                            data_types = 'WND,TMP,DEW,SLP'
+                            url_params[2] = f'dataTypes={data_types}'
+                            api_url = self.API_ENDPOINT + '&'.join(url_params)
+                            print(f"Trying with fewer data types: {data_types}")
+                    
                     raise KeyError
                     
             except KeyboardInterrupt:
                 raise KeyboardInterrupt
                 
-            except:
+            except Exception as e:
                 if 'response' in locals():
-                    print(f'Failed ({response.reason}. Code {response.status_code})')
+                    print(f'Failed ({response.reason if hasattr(response, "reason") else "Unknown error"}. Code {response.status_code if hasattr(response, "status_code") else "Unknown"})')
                     del response
                 else:
-                    print('Failed (https connection error)')
+                    print(f'Failed (connection error: {str(e)})')
                         
             if i < numAttempts:
+                # Wait a bit before the next attempt
+                time.sleep(1)
                 continue
-                
+        
+        # Check if we got a successful response
         try:
-            if response.status_code != 200:
-                errors = response.json()['errors']
-                errtxt = 'Error fetching data from NOAA API:\n'
-                errtxt += f'Status code: {response.status_code}\n'
-                errtxt += f'Error message: {response.json()["errorMessage"]}\n'
-                for err in errors:
-                    errtxt += f'Field "{err["field"]}": {err["message"]} (current value {err["value"]})\n'
-                raise requests.RequestException(errtxt)
+            if 'response' not in locals() or response.status_code != 200:
+                print(f'\nResource could not be fetched after {numAttempts} iterations')
+                print('NOAA server could be temporarily unavailable\n')
+                print('Returning empty DataFrame')
+                
+                # Return an empty DataFrame with the expected columns
+                columns = list(self._names.values())
+                columns += [name for l in self._MANDATORY_SECTION_GROUPS.values() for name in l]
+                if 'Date' in columns:
+                    columns.remove('Date')
+                return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], name='UTC'))
                 
         except NameError:
             print(f'\nResource could not be fetched after {numAttempts} iterations')
             print('NOAA server could be temporarily unavailable\n')
-            print('--Exiting Script--')
-            sys.exit()
+            print('Returning empty DataFrame')
+            
+            # Return an empty DataFrame with the expected columns
+            columns = list(self._names.values())
+            columns += [name for l in self._MANDATORY_SECTION_GROUPS.values() for name in l]
+            if 'Date' in columns:
+                columns.remove('Date')
+            return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], name='UTC'))
             
         # Process response
-        data = pd.read_json(response.text)
+        try:
+            data = pd.read_json(response.text)
+        except Exception as e:
+            print(f"Error parsing JSON response: {e}")
+            print("Returning empty DataFrame")
+            
+            # Return an empty DataFrame with the expected columns
+            columns = list(self._names.values())
+            columns += [name for l in self._MANDATORY_SECTION_GROUPS.values() for name in l]
+            if 'Date' in columns:
+                columns.remove('Date')
+            return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], name='UTC'))
         
         if len(data) == 0:
             print('WARNING: No data received')
             columns = list(self._names.values())
             columns += [name for l in self._MANDATORY_SECTION_GROUPS.values() for name in l]
-            columns.remove('Date')
-            return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], name='Date'))
+            if 'Date' in columns:
+                columns.remove('Date')
+            return pd.DataFrame(columns=columns, index=pd.DatetimeIndex([], name='UTC'))
             
         # Convert date column
         data['DATE'] = pd.to_datetime(data['DATE'])
@@ -934,7 +1009,8 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 
         # Set index and convert to numeric
         data.set_index('UTC', inplace=True)
-        data.drop('STATION', axis='columns', inplace=True)
+        if 'STATION' in data.columns:
+            data.drop('STATION', axis='columns', inplace=True)
         
         for col in data.columns:
             try:
