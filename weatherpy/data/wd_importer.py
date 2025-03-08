@@ -839,6 +839,15 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             Additional arguments passed to WeatherDataImporter
         """
         super().__init__(station_id, data_type='NOAA', **kwargs)
+        
+        # Initialize station database
+        from weatherpy.data.wd_stations import WeatherStationDatabase
+        try:
+            self.station_db = WeatherStationDatabase(data_type='NOAA')
+            print(f"NOAA station database loaded successfully")
+        except Exception as e:
+            print(f"Error loading NOAA station database: {e}")
+            self.station_db = None
     
     def _import_from_source(self) -> pd.DataFrame:
         """
@@ -866,16 +875,10 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Define data types to request
         data_types = 'WND,CIG,VIS,TMP,DEW,SLP,LONGITUDE,LATITUDE,ELEVATION,GA1,AA2'
         
-        # Ensure year values are valid (not exceeding reasonable limits)
-        start_year = max(1900, min(self.year_start - 1, 2100))
-        end_year = max(1900, min(self.year_end + 1, 2100))
+        # Get date bounds for API request
+        start_date_UTC, end_date_UTC = self._noaa_date_bounds()
         
-        # Convert dates to UTC for API request
-        start_date_UTC = pytz.UTC.localize(
-            datetime.strptime(f'{start_year} 12 25 00:00', '%Y %m %d %H:%M'))
-        end_date_UTC = pytz.UTC.localize(
-            datetime.strptime(f'{end_year} 01 05 23:59', '%Y %m %d %H:%M'))
-            
+        # Format dates for API request
         start_date_str = start_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         end_date_str = end_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         
@@ -1037,15 +1040,17 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         data = data.tz_localize('UTC')
         data_fixed = self._fix_NOAA_dimensions(data)
         
-        # Add local time
-        timezone_local = pytz.timezone(self.get_station_info()['Timezone Name'])
+        # Get station info for timezone
+        station_info = self.get_station_info()
+        timezone_local = pytz.timezone(station_info['Timezone Name'])
+        
+        # Add local time column
         data_fixed.insert(loc=0, column='LocalTime',
                          value=data_fixed.index.tz_convert(timezone_local))
         
-        # Ensure timezone is correct
+        # Set the correct index based on the requested timezone
         if self.time_zone == 'LocalTime':
-            data_fixed = data_fixed.reset_index()
-            data_fixed = data_fixed.set_index('LocalTime')
+            data_fixed = data_fixed.reset_index().set_index('LocalTime')
         
         return data_fixed
     
@@ -1068,72 +1073,55 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             Processed NOAA data
         """
         data = pd.DataFrame(index=dataRaw.index)
-        data['WindDir'] = dataRaw['WindDir']
-        data['WindSpeed'] = dataRaw['WindSpeed']/10        # [m/s]
-        data['SeaLevelPressure'] = dataRaw['SeaLevelPressure']/10 # [mbar]
-        data['Temperature'] = dataRaw['Temperature']/10      # [Celsius]
-        data['DewPointTemp'] = dataRaw['DewPointTemp']/10 # [Celsius]
-        data['CloudHgt'] = dataRaw['CloudHgt'] #[m]
         
-        try:
-            data['CloudOktas'] = dataRaw['CloudOktas']
-        except:
-            data['CloudOktas'] = np.nan
+        # Safely get fields with default values for missing fields
+        def safe_get_field(field, default=np.nan, scaling_factor=1.0):
+            if field in dataRaw.columns:
+                # Check if the field contains numeric values
+                try:
+                    # Try to convert to numeric first
+                    values = pd.to_numeric(dataRaw[field], errors='coerce')
+                    # Apply scaling only if it's numeric and scaling is needed
+                    if scaling_factor != 1.0:
+                        return values / scaling_factor
+                    return values
+                except:
+                    # If conversion fails, return as is (for string fields)
+                    print(f"Warning: Field '{field}' contains non-numeric values. Not applying scaling.")
+                    return dataRaw[field]
+            else:
+                print(f"Warning: Field '{field}' not found in raw data. Using default value.")
+                return pd.Series(default, index=dataRaw.index)
         
-        data['Visibility'] = dataRaw['Visibility']        # [m]
-        
-        try:
-            data['RainCumulative'] = dataRaw['RainCumulative']/10
-        except:
-            data['RainCumulative'] = np.nan
+        # Process main fields with appropriate scaling
+        data['WindDir'] = safe_get_field('WindDir')
+        data['WindSpeed'] = safe_get_field('WindSpeed', scaling_factor=10)  # [m/s]
+        data['SeaLevelPressure'] = safe_get_field('SeaLevelPressure', scaling_factor=10)  # [mbar]
+        data['Temperature'] = safe_get_field('Temperature', scaling_factor=10)  # [Celsius]
+        data['DewPointTemp'] = safe_get_field('DewPointTemp', scaling_factor=10)  # [Celsius]
+        data['CloudHgt'] = safe_get_field('CloudHgt')  # [m]
+        data['CloudOktas'] = safe_get_field('CloudOktas')
+        data['Visibility'] = safe_get_field('Visibility')  # [m]
+        data['RainCumulative'] = safe_get_field('RainCumulative', scaling_factor=10)
         
         # Additional fields
-        if 'OC1_0' in dataRaw.columns:
-            data['OC1_0'] = dataRaw['OC1_0']/10
-        else:
-            data['OC1_0'] = np.nan
-
-        if 'MW1_0' in dataRaw.columns:
-            data['MW1_0'] = dataRaw['MW1_0']
-        else:
-            data['MW1_0'] = np.nan
-
-        if 'MW1_1' in dataRaw.columns:
-            data['MW1_1'] = dataRaw['MW1_1']
-        else:
-            data['MW1_1'] = np.nan
-
-        if 'AJ1_0' in dataRaw.columns:
-            data['AJ1_0'] = dataRaw['AJ1_0']
-        else:
-            data['AJ1_0'] = np.nan
-
-        if 'RH1_2' in dataRaw.columns:
-            data['RH1_2'] = dataRaw['RH1_2']
-        else:
-            data['RH1_2'] = np.nan
-            
-        if 'GA1_0' in dataRaw.columns:
-            data['GA1_0'] = dataRaw['GA1_0']
-        else:
-            data['GA1_0'] = np.nan
+        data['OC1_0'] = safe_get_field('OC1_0', scaling_factor=10)
+        data['MW1_0'] = safe_get_field('MW1_0')
+        data['MW1_1'] = safe_get_field('MW1_1')
+        data['AJ1_0'] = safe_get_field('AJ1_0')
+        data['RH1_2'] = safe_get_field('RH1_2')
+        data['GA1_0'] = safe_get_field('GA1_0')
         
         # Process custom fields
         for field, scaling_factor in custom_fields.items():
-            if field in dataRaw:
-                data[field] = dataRaw[field]/scaling_factor
-            else:
-                if not ignore_missing:
-                    raise KeyError(field)
-                else:
-                    data[field] = np.nan
+            data[field] = safe_get_field(field, scaling_factor=scaling_factor)
         
-        # Copy metadata fields
-        data['WindType'] = dataRaw['WindType']
-        data['ReportType'] = dataRaw['ReportType']
-        data['QCWindSpeed'] = dataRaw['QCWindSpeed']
-        data['QCName'] = dataRaw['QCName']
-        data['QCWindDir'] = dataRaw['QCWindDir']
+        # Copy metadata fields with safe handling
+        data['WindType'] = safe_get_field('WindType')
+        data['ReportType'] = safe_get_field('ReportType')
+        data['QCWindSpeed'] = safe_get_field('QCWindSpeed')
+        data['QCName'] = safe_get_field('QCName')
+        data['QCWindDir'] = safe_get_field('QCWindDir')
 
         return data
     
@@ -1144,104 +1132,61 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         Returns
         -------
         Tuple[datetime, datetime]
-            Start and end datetime bounds
+            Start and end datetime bounds in UTC
         """
         # Ensure year values are valid (not exceeding reasonable limits)
-        start_year = max(1900, min(self.year_start, 2100))
-        end_year = max(1900, min(self.year_end, 2100))
+        start_year = max(1900, min(self.year_start - 1, 2100))
+        end_year = max(1900, min(self.year_end + 1, 2100))
         
+        # Create UTC dates for the API request
+        # We extend the range slightly to ensure we get all data
         start_date = pytz.UTC.localize(
-            datetime.strptime(f"{start_year} 01 01 00:00", '%Y %m %d %H:%M'))
+            datetime.strptime(f"{start_year} 12 25 00:00", '%Y %m %d %H:%M'))
         end_date = pytz.UTC.localize(
-            datetime.strptime(f"{end_year} 12 31 23:59", '%Y %m %d %H:%M'))
+            datetime.strptime(f"{end_year} 01 05 23:59", '%Y %m %d %H:%M'))
         
-        if self.time_zone == 'UTC':
-            return start_date, end_date
-        
-        elif self.time_zone == 'LocalTime':
-            station_info = self.get_station_info()
-            timezone_offset = station_info['Timezone UTC']
-            try:
-                # Check if the timezone offset has the expected format
-                if len(timezone_offset) >= 9 and timezone_offset[4] in ['+', '-']:
-                    tz_hours = int(timezone_offset[5:7])
-                    tz_mins = int(timezone_offset[8:10] if len(timezone_offset) >= 10 else '00')
-                    tz_delta = timedelta(hours=tz_hours, minutes=tz_mins)
-                    if timezone_offset[4] == '-':
-                        tz_delta = -tz_delta
-                else:
-                    # Default to -05:00 for US if format is incorrect
-                    print(f"Warning: Invalid timezone offset format: {timezone_offset}. Using default -05:00.")
-                    tz_delta = timedelta(hours=-5)
-            except (ValueError, IndexError):
-                # Default to -05:00 for US if parsing fails
-                print(f"Warning: Failed to parse timezone offset: {timezone_offset}. Using default -05:00.")
-                tz_delta = timedelta(hours=-5)
-                
-            start_date = start_date - tz_delta
-            end_date = end_date - tz_delta
-            return start_date, end_date
-        
-        else:
-            raise ValueError('timeZone argument must be either "UTC" or "LocalTime"')
+        return start_date, end_date
         
     def get_station_info(self) -> Dict[str, Any]:
         """
-        Get NOAA station information.
+        Get NOAA station information using the WeatherStationDatabase.
         
         Returns
         -------
         Dict[str, Any]
             Station information
         """
-        # Get the path to the stations database
-        current_dir = Path(__file__).resolve().parent
-        db_file = current_dir / 'src' / 'NOAA_stations_full.csv'
-        
-        # Check if the file exists
-        if not db_file.exists():
-            print(f"Error: Station database file not found at {db_file}")
-            print(f"Current directory: {current_dir}")
-            print(f"Looking for: {db_file.name}")
-            print("Using default station information")
-            return self._get_default_station_info()
-        
-        # Load database if it exists
         try:
-            stations = pd.read_csv(db_file)
+            # Try to get station from database
+            if self.station_db is not None:
+                try:
+                    station = self.station_db.get_station(self.station_id)
+                    print(f"Found station in database: {station.name}")
+                    
+                    # Convert to dictionary with required fields
+                    info = {
+                        'Station Name': station.name,
+                        'State': 'Unknown',  # Not directly available in WeatherStation
+                        'Country': 'USA',    # Not directly available in WeatherStation
+                        'Latitude': station.latitude,
+                        'Longitude': station.longitude,
+                        'Elevation': station.elevation,
+                        'Start': station.start_year,
+                        'End': station.end_year,
+                        'Timezone Name': 'America/New_York',  # Default timezone
+                        'Timezone UTC': '-05:00'              # Default timezone offset
+                    }
+                    
+                    return info
+                except ValueError as e:
+                    print(f"Station not found in database: {e}")
+                    # Fall back to default info
             
-            # Find station
-            station_id = str(self.station_id).zfill(11)
-            print(f"Looking for NOAA station ID: {station_id}")
-            print(f"Available NOAA station IDs: {stations['Station ID'].unique()[:5]}...")
-            
-            station_data = stations[stations['Station ID'] == station_id]
-            
-            if len(station_data) > 0:
-                # Convert to dictionary
-                info = station_data.iloc[0].to_dict()
-                
-                # Ensure required fields are present
-                required_fields = {
-                    'Station Name': str(info.get('Station Name', f'NOAA Station {station_id}')),
-                    'State': str(info.get('State', 'Unknown')),
-                    'Country': str(info.get('Country', 'USA')),
-                    'Latitude': float(info.get('Latitude', 0.0)),
-                    'Longitude': float(info.get('Longitude', 0.0)),
-                    'Elevation': float(info.get('Elevation', 0.0)),
-                    'Start': str(info.get('Start', '2000/01/01')),
-                    'End': str(info.get('End', '2023/12/31')),
-                    'Timezone Name': str(info.get('Timezone Name', 'America/New_York')),
-                    'Timezone UTC': str(info.get('Timezone UTC', '-05:00'))
-                }
-                
-                return required_fields
-            else:
-                print(f"NOAA station not found: {station_id}")
-                return self._get_default_station_info()
+            # If we get here, either the database is not available or the station was not found
+            return self._get_default_station_info()
                 
         except Exception as e:
-            print(f"Error loading NOAA station database: {e}")
+            print(f"Error getting station info: {e}")
             return self._get_default_station_info()
     
     def _get_default_station_info(self) -> Dict[str, Any]:

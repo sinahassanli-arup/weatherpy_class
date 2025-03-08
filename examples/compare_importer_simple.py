@@ -173,6 +173,18 @@ if __name__ == "__main__":
                 'interval': 60,
                 'verbose': True
             }
+        },
+        {
+            'name': 'NOAA New York (2010-2020) UTC',
+            'params': {
+                'stationID': '72503014732',
+                'dataType': 'NOAA',
+                'timeZone': 'UTC',
+                'yearStart': 2010,
+                'yearEnd': 2020,
+                'interval': 60,
+                'verbose': True
+            }
         }
     ]
     
