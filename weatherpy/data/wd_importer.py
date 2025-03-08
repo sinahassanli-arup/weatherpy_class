@@ -16,13 +16,15 @@ import tempfile
 import zipfile
 import io
 from pathlib import Path
+from .wd_stations import WeatherStationDatabase
+from .wd_base import WeatherData
 
 # Import preparation modules
 # from ._noaa_preparation import _fix_NOAA_dimensions as fix_noaa_dimensions
 # from ._noaa_preparation import _noaa_date_bounds
 # from ._bom_preparation import _import_bomhistoric, _bom_date_bounds
 
-class WeatherDataImporter:
+class WeatherDataImporter(WeatherData):
     """Base class for importing weather data."""
     
     API_ENDPOINT = "https://www.ncdc.noaa.gov/cdo-web/api/v2/data?"
@@ -41,22 +43,23 @@ class WeatherDataImporter:
         Parameters
         ----------
         station_id : str
-            Station ID to import data for
+            Station ID.
         data_type : str, optional
-            Type of data to import ('BOM' or 'NOAA'), by default 'BOM'
+            Type of data to import. The default is 'BOM'.
         time_zone : str, optional
-            Timezone for data ('LocalTime' or 'UTC'), by default None.
-            If None, 'LocalTime' will be used for BOM and 'UTC' for NOAA.
+            Time zone. The default is None.
         year_start : int, optional
-            Start year for data import, by default None
+            Start year. The default is None.
         year_end : int, optional
-            End year for data import, by default None
+            End year. The default is None.
         interval : int, optional
-            Data interval in minutes, by default None.
-            If None, 60 will be used for BOM and 30 for NOAA.
+            Interval in minutes. The default is None.
         save_raw : bool, optional
-            Whether to save raw data to cache, by default False
+            Save raw data. The default is False.
         """
+        # Initialize with empty DataFrame
+        super().__init__(pd.DataFrame())
+        
         self.station_id = station_id
         self.data_type = data_type
         
@@ -76,6 +79,15 @@ class WeatherDataImporter:
             self.interval = interval
             
         self.save_raw = save_raw
+        
+        # Initialize station database
+        self.station_db = WeatherStationDatabase(data_type)
+        
+        # Get station info
+        self.station_info = self.get_station_info()
+        
+        # Get timezone
+        self.timezone = pytz.timezone(self.station_info['Timezone Name'])
         
         # Mapping of NOAA field names to our names
         self._names = {
@@ -122,6 +134,10 @@ class WeatherDataImporter:
         
         # Validate inputs
         self._validate_inputs()
+        
+        # Validate years
+        if self.year_start is not None and self.year_end is not None:
+            self.year_start, self.year_end = self._validate_station_years()
         
     def _validate_inputs(self):
         """Validate input parameters."""
@@ -264,19 +280,41 @@ class WeatherDataImporter:
             
     def _get_date_bounds(self) -> Tuple[datetime, datetime]:
         """
-        Get datetime bounds for data import.
+        Get date bounds for data import.
         
         Returns
         -------
         Tuple[datetime, datetime]
-            Start and end datetime bounds
+            Start and end datetime bounds.
         """
-        if self.data_type == 'NOAA':
-            # For NOAA, use the internal method
-            return self._noaa_date_bounds()
+        # Get station timezone
+        station_info = self.get_station_info()
+        timezone_local = pytz.timezone(station_info['Timezone Name'])
+        
+        # Create date bounds in local timezone
+        if self.data_type == 'BOM':
+            # For BOM, we use the start and end of the year
+            start_date = timezone_local.localize(
+                datetime.strptime(f"{self.year_start} 01 01 00:00", '%Y %m %d %H:%M'))
+            end_date = timezone_local.localize(
+                datetime.strptime(f"{self.year_end} 12 31 23:59", '%Y %m %d %H:%M'))
+        elif self.data_type == 'NOAA':
+            # For NOAA, we add buffer days before and after
+            start_date = timezone_local.localize(
+                datetime.strptime(f"{self.year_start-1} 12 25 00:00", '%Y %m %d %H:%M'))
+            end_date = timezone_local.localize(
+                datetime.strptime(f"{self.year_end+1} 01 05 23:59", '%Y %m %d %H:%M'))
         else:
-            # For BOM, use the internal method
-            return self._bom_date_bounds()
+            raise ValueError(f"Unsupported data type: {self.data_type}")
+        
+        # For UTC, convert to UTC timezone
+        if self.time_zone == 'UTC':
+            start_date_utc = start_date.astimezone(pytz.UTC)
+            end_date_utc = end_date.astimezone(pytz.UTC)
+            return start_date_utc, end_date_utc
+        else:
+            # For LocalTime, return the local timezone dates
+            return start_date, end_date
         
     def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=False):
         """
@@ -402,116 +440,16 @@ class WeatherDataImporter:
         # This method should be implemented in the derived classes
         raise NotImplementedError("Subclasses must implement _import_from_source method")
 
-    def _bom_date_bounds(self) -> Tuple[datetime, datetime]:
-        """
-        Get date bounds for BOM data.
-        
-        Returns
-        -------
-        Tuple[datetime, datetime]
-            Start and end datetime bounds
-        """
-        station_info = self.get_station_info()
-        timezone_local = pytz.timezone(station_info['Timezone Name'])
-        
-        # Create date bounds in local timezone
-        start_date = timezone_local.localize(
-            datetime.strptime(f"{self.year_start} 01 01 00:00", '%Y %m %d %H:%M'))
-        end_date = timezone_local.localize(
-            datetime.strptime(f"{self.year_end} 12 31 23:59", '%Y %m %d %H:%M'))
-        
-        # For UTC, we need to match the legacy implementation exactly
-        if self.time_zone == 'UTC':
-            # Convert to UTC for filtering
-            start_date_utc = start_date.astimezone(pytz.UTC)
-            end_date_utc = end_date.astimezone(pytz.UTC)
-            return start_date_utc, end_date_utc
-        else:
-            # For LocalTime, return the local timezone dates
-            return start_date, end_date
-        
     def get_station_info(self) -> Dict[str, Any]:
         """
-        Get BOM station information.
+        Get station information.
         
         Returns
         -------
         Dict[str, Any]
-            Station information
+            Station information.
         """
-        # Get the path to the stations database
-        current_dir = Path(__file__).resolve().parent
-        db_file = current_dir / 'src' / 'BOM_stations_clean.csv'
-        
-        # Check if the file exists
-        if not db_file.exists():
-            print(f"Error: Station database file not found at {db_file}")
-            print(f"Current directory: {current_dir}")
-            print(f"Looking for: {db_file.name}")
-            print("Using default station information")
-            return self._get_default_station_info()
-        
-        # Load database
-        try:
-            stations = pd.read_csv(db_file)
-            
-            # Find station
-            station_id = str(self.station_id).zfill(6)
-            print(f"Looking for station ID: {station_id}")
-            print(f"Available station IDs: {stations['Station Code'].unique()[:5]}...")
-            
-            station_data = stations[stations['Station Code'] == station_id]
-            
-            if len(station_data) == 0:
-                print(f"Station not found: {station_id}")
-                return self._get_default_station_info()
-                
-            # Convert to dictionary
-            info = station_data.iloc[0].to_dict()
-            
-            # Ensure required fields are present
-            required_fields = {
-                'Station Name': str(info.get('Station Name', f'BOM Station {station_id}')),
-                'State': str(info.get('State', 'Unknown')),
-                'Country': 'Australia',
-                'Latitude': float(info.get('Latitude', 0.0)),
-                'Longitude': float(info.get('Longitude', 0.0)),
-                'Elevation': float(info.get('Elevation', 0.0)),
-                'Start': str(info.get('Start', '2000')),
-                'End': str(info.get('End', '2023')),
-                'Timezone Name': str(info.get('Timezone Name', 'Australia/Sydney')),
-                'Timezone UTC': str(info.get('Timezone UTC', '+10:00'))
-            }
-            
-            return required_fields
-        except Exception as e:
-            print(f"Error loading station database: {e}")
-            return self._get_default_station_info()
-    
-    def _get_default_station_info(self) -> Dict[str, Any]:
-        """
-        Get default station information when database lookup fails.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Default station information
-        """
-        print(f"Using default station information for {self.station_id}")
-        
-        # Return default values if database can't be loaded
-        return {
-            'Station Name': f'BOM Station {self.station_id}',
-            'State': 'Unknown',
-            'Country': 'Australia',
-            'Latitude': -33.0,
-            'Longitude': 151.0,
-            'Elevation': 0.0,
-            'Start': '2000',
-            'End': '2023',
-            'Timezone Name': 'Australia/Sydney',
-            'Timezone UTC': '+10:00'
-        }
+        return self.station_db.get_station_info(self.station_id)
 
 class BOMWeatherDataImporter(WeatherDataImporter):
     """Class for importing BOM weather data."""
@@ -702,7 +640,7 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         Parameters
         ----------
         station_id : str
-            NOAA station ID (up to 11 digits)
+            NOAA station ID
         **kwargs : dict
             Additional arguments passed to WeatherDataImporter
         """
@@ -740,8 +678,20 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         import requests
         import time as time_module
         import io
+        import os
         
         print("Importing NOAA data...")
+        
+        # Check if cached data exists first
+        cache_dir, cache_file = self._get_cache_path()
+        if os.path.exists(cache_file):
+            print(f"Loading cached data from {cache_file}")
+            try:
+                cached_data = pd.read_pickle(cache_file)
+                print("Successfully loaded cached data")
+                return cached_data
+            except Exception as e:
+                print(f"Error loading cached data: {e}")
         
         # Prepare fields for API request
         ID = int(self.station_id)
@@ -772,6 +722,7 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Send API request and wait for answer
         numAttempts = 10
         i = 0
+        response = None
 
         # Bracket for repeat attempts at API
         while i < numAttempts:
@@ -795,11 +746,12 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             except Exception as e:
                 print(f"Failed (connection error: {str(e)})")
                 
-            # Wait before retrying
-            time_module.sleep(1)
+            # Wait before retrying with exponential backoff
+            wait_time = 2 ** (i - 1)  # 1, 2, 4, 8, 16, ...
+            time_module.sleep(min(wait_time, 30))  # Cap at 30 seconds
 
         # Check if we got a successful response
-        if i >= numAttempts or response.status_code != 200:
+        if i >= numAttempts or response is None or response.status_code != 200:
             print(f'\nResource could not be fetched after {numAttempts} iterations')
             print('NOAA server could be temporarily unavailable\n')
             # Return empty DataFrame with correct columns
@@ -841,22 +793,31 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         }
         data.rename(column_mapping, axis='columns', inplace=True)
 
-        # Split mandatory groups and rename
+        # Split mandatory groups and rename - this is a performance bottleneck
         for group_name, group_fields in self._MANDATORY_SECTION_GROUPS.items():
             if group_name in data.columns:
-                data[group_fields] = data[group_name].str.split(',', expand=True)
+                # Use a more efficient approach for string splitting
+                split_data = data[group_name].str.split(',', expand=True)
+                # Only assign columns that exist in group_fields
+                for i, field in enumerate(group_fields):
+                    if i < split_data.shape[1]:  # Check if the column exists
+                        data[field] = split_data[i]
                 data.drop(group_name, axis='columns', inplace=True)
 
         # Set DateTime Index
         data.set_index('UTC', inplace=True)
         data.drop('STATION', axis='columns', inplace=True)
 
-        # Try converting to numeric
+        # Try converting to numeric - optimize by only processing necessary columns
+        numeric_columns = ['WindDir', 'WindSpeed', 'SeaLevelPressure', 'Temperature', 
+                          'DewPointTemp', 'CloudHgt', 'CloudOktas', 'Visibility', 
+                          'RainCumulative']
         for col in data.columns:
-            try:
-                data[col] = pd.to_numeric(data[col], errors="raise")
-            except:
-                pass
+            if col in numeric_columns:
+                try:
+                    data[col] = pd.to_numeric(data[col], errors="coerce")
+                except:
+                    pass
         
         data = data.tz_localize('UTC')  # localize the timezone of the index to UTC
         
@@ -901,6 +862,23 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Convert QCWindSpeed and QCWindDir to object type to match legacy implementation
         data_fixed['QCWindSpeed'] = data_fixed['QCWindSpeed'].astype(object)
         data_fixed['QCWindDir'] = data_fixed['QCWindDir'].astype(object)
+        
+        # Replace non-numeric values with '0'
+        data_fixed['QCWindSpeed'] = data_fixed['QCWindSpeed'].replace(r'[^0-9]', '0', regex=True)
+        data_fixed['QCWindDir'] = data_fixed['QCWindDir'].replace(r'[^0-9]', '0', regex=True)
+        
+        # Now convert to Int64 which can handle NaN values
+        data_fixed['QCWindSpeed'] = pd.to_numeric(data_fixed['QCWindSpeed'], errors='coerce').astype('Int64')
+        data_fixed['QCWindDir'] = pd.to_numeric(data_fixed['QCWindDir'], errors='coerce').astype('Int64')
+
+        # Save to cache for future use
+        try:
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+            data_fixed.to_pickle(cache_file)
+            print(f"Saved data to cache: {cache_file}")
+        except Exception as e:
+            print(f"Error saving to cache: {e}")
         
         return data_fixed
 
@@ -1003,95 +981,13 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
 
         return data
     
-    def _noaa_date_bounds(self) -> Tuple[datetime, datetime]:
-        """
-        Get date bounds for NOAA data.
-        
-        Returns
-        -------
-        Tuple[datetime, datetime]
-            Start and end datetime bounds in UTC
-        """
-        # Ensure year values are valid (not exceeding reasonable limits)
-        start_year = max(1900, min(self.year_start - 1, 2100))
-        end_year = max(1900, min(self.year_end + 1, 2100))
-        
-        # Get station info for timezone conversion if needed
-        station_info = self.get_station_info()
-        timezone_local = pytz.timezone(station_info['Timezone Name'])
-        
-        # Create dates in UTC to match legacy implementation
-        # We extend the range slightly to ensure we get all data
-        start_date = pytz.UTC.localize(
-            datetime.strptime(f"{start_year} 12 25 00:00", '%Y %m %d %H:%M'))
-        end_date = pytz.UTC.localize(
-            datetime.strptime(f"{end_year} 01 05 23:59", '%Y %m %d %H:%M'))
-        
-        return start_date, end_date
-        
     def get_station_info(self) -> Dict[str, Any]:
         """
-        Get NOAA station information using the WeatherStationDatabase.
+        Get station information.
         
         Returns
         -------
         Dict[str, Any]
-            Station information
+            Station information.
         """
-        try:
-            # Try to get station from database
-            if self.station_db is not None:
-                try:
-                    station = self.station_db.get_station(self.station_id)
-                    print(f"Found station in database: {station.name}")
-                    
-                    # Convert to dictionary with required fields
-                    info = {
-                        'Station Name': station.name,
-                        'State': 'Unknown',  # Not directly available in WeatherStation
-                        'Country': 'USA',    # Not directly available in WeatherStation
-                        'Latitude': station.latitude,
-                        'Longitude': station.longitude,
-                        'Elevation': station.elevation,
-                        'Start': station.start_year,
-                        'End': station.end_year,
-                        'Timezone Name': 'America/New_York',  # Default timezone
-                        'Timezone UTC': '-05:00'              # Default timezone offset
-                    }
-                    
-                    return info
-                except ValueError as e:
-                    print(f"Station not found in database: {e}")
-                    # Fall back to default info
-            
-            # If we get here, either the database is not available or the station was not found
-            return self._get_default_station_info()
-                
-        except Exception as e:
-            print(f"Error getting station info: {e}")
-            return self._get_default_station_info()
-    
-    def _get_default_station_info(self) -> Dict[str, Any]:
-        """
-        Get default station information when database lookup fails.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Default station information
-        """
-        print(f"Using default station information for NOAA station {self.station_id}")
-        
-        # Return default values if database doesn't exist or station not found
-        return {
-            'Station Name': f'NOAA Station {self.station_id}',
-            'State': 'Unknown',
-            'Country': 'USA',
-            'Latitude': 40.0,
-            'Longitude': -74.0,
-            'Elevation': 0.0,
-            'Start': '2000/01/01',
-            'End': '2023/12/31',
-            'Timezone Name': 'America/New_York',
-            'Timezone UTC': '-05:00'
-        }
+        return self.station_db.get_station_info(self.station_id)

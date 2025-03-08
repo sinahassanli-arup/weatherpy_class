@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 
 class WeatherStation:
     """Class representing a single weather station."""
@@ -68,49 +68,257 @@ class WeatherStationDatabase:
     
     def __init__(self, data_type: str = 'BOM'):
         """
-        Initialize database.
+        Initialize the database.
         
         Parameters
         ----------
-        data_type : str
-            'BOM' or 'NOAA'
+        data_type : str, optional
+            Type of database. The default is 'BOM'.
         """
-        self.data_type = data_type.upper()
-        self._load_database()
-    
-    def _load_database(self):
-        """Load the station database."""
-        # Get the path to the data directory
-        current_dir = Path(__file__).resolve().parent
-        data_dir = current_dir / 'src'
+        self.data_type = data_type
+        self._data = self._load_database()
         
-        # Choose database file
+    def _load_database(self):
+        """
+        Load the station database.
+        
+        Returns
+        -------
+        pandas.DataFrame
+            Station database.
+        """
+        # Get the path to the stations database
+        current_dir = Path(__file__).resolve().parent
+        
         if self.data_type == 'BOM':
-            db_file = data_dir / 'BOM_stations_clean.csv'
-            self.id_length = 6
+            db_file = current_dir / 'src' / 'BOM_stations_clean.csv'
         elif self.data_type == 'NOAA':
-            db_file = data_dir / 'NOAA_stations_full.csv'
-            self.id_length = 11
+            db_file = current_dir / 'src' / 'NOAA_stations.csv'
         else:
-            raise ValueError("data_type must be 'BOM' or 'NOAA'")
+            raise ValueError(f"Unsupported data type: {self.data_type}")
+        
+        # Check if the file exists
+        if not db_file.exists():
+            print(f"Error: Station database file not found at {db_file}")
+            return pd.DataFrame()
         
         # Load database
-        self.stations = pd.read_csv(db_file)
-        
-        # Pad station codes
-        self.stations['Station Code'] = self.stations['Station Code'].astype(str).str.zfill(self.id_length)
+        try:
+            return pd.read_csv(db_file)
+        except Exception as e:
+            print(f"Error loading station database: {e}")
+            return pd.DataFrame()
     
     def get_station(self, station_id: str) -> WeatherStation:
-        """Get station by ID."""
-        # Pad ID if needed
-        station_id = str(station_id).zfill(self.id_length)
+        """
+        Get a station by ID.
         
-        # Find station
-        station_data = self.stations[self.stations['Station Code'] == station_id]
+        Parameters
+        ----------
+        station_id : str
+            Station ID.
+        
+        Returns
+        -------
+        WeatherStation
+            Station object.
+        
+        Raises
+        ------
+        ValueError
+            If the station is not found.
+        """
+        if self.data_type == 'BOM':
+            station_id = str(station_id).zfill(6)
+            station_data = self._data[self._data['Station Code'] == station_id]
+        elif self.data_type == 'NOAA':
+            station_id = str(station_id)
+            station_data = self._data[self._data['Station ID'] == station_id]
+        else:
+            raise ValueError(f"Unsupported data type: {self.data_type}")
+        
         if len(station_data) == 0:
-            raise ValueError(f"Station not found: {station_id}")
-        
+            print(f"Station not found: {station_id}")
+            return self._get_default_station(station_id)
+            
         return WeatherStation(station_data.iloc[0])
+    
+    def get_station_info(self, station_id: str) -> Dict[str, Any]:
+        """
+        Get station information in a dictionary format.
+        
+        Parameters
+        ----------
+        station_id : str
+            Station ID.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Station information.
+        """
+        try:
+            # Print available station IDs for debugging
+            print(f"Looking for station ID: {station_id}")
+            if not self._data.empty:
+                if self.data_type == 'BOM':
+                    id_column = 'Station Code'
+                elif self.data_type == 'NOAA':
+                    id_column = 'Station ID'
+                else:
+                    id_column = None
+                
+                if id_column and id_column in self._data.columns:
+                    print(f"Available station IDs: {self._data[id_column].unique()[:5]}...")
+            
+            # Get station
+            station = self.get_station(station_id)
+            
+            # Convert to dictionary format based on data type
+            if self.data_type == 'BOM':
+                return {
+                    'Station Name': station.name,
+                    'State': station.data.get('State', 'Unknown'),
+                    'Country': 'Australia',
+                    'Latitude': station.latitude,
+                    'Longitude': station.longitude,
+                    'Elevation': station.elevation,
+                    'Start': station.start_year,
+                    'End': station.end_year,
+                    'Timezone Name': station.data.get('Timezone Name', 'Australia/Sydney'),
+                    'Timezone UTC': station.data.get('Timezone UTC', '+10:00')
+                }
+            elif self.data_type == 'NOAA':
+                return {
+                    'Station Name': station.name,
+                    'State': station.data.get('State', 'Unknown'),
+                    'Country': station.data.get('Country', 'United States'),
+                    'Latitude': station.latitude,
+                    'Longitude': station.longitude,
+                    'Elevation': station.elevation,
+                    'Start': station.start_year,
+                    'End': station.end_year,
+                    'Timezone Name': station.data.get('Timezone Name', 'America/New_York'),
+                    'Timezone UTC': station.data.get('Timezone UTC', '-05:00')
+                }
+            else:
+                raise ValueError(f"Unsupported data type: {self.data_type}")
+        except Exception as e:
+            print(f"Error getting station info: {e}")
+            return self._get_default_station_info(station_id)
+    
+    def _get_default_station(self, station_id: str) -> WeatherStation:
+        """
+        Get default station when database lookup fails.
+        
+        Parameters
+        ----------
+        station_id : str
+            Station ID.
+        
+        Returns
+        -------
+        WeatherStation
+            Default station.
+        """
+        print(f"Using default station information for {station_id}")
+        
+        # Create default data based on data type
+        if self.data_type == 'BOM':
+            default_data = {
+                'Station Code': station_id,
+                'Station Name': f'BOM Station {station_id}',
+                'State': 'Unknown',
+                'Latitude': -33.0,
+                'Longitude': 151.0,
+                'Elevation': 0.0,
+                'Start': '2000',
+                'End': '2023',
+                'Timezone Name': 'Australia/Sydney',
+                'Timezone UTC': '+10:00'
+            }
+        elif self.data_type == 'NOAA':
+            default_data = {
+                'Station ID': station_id,
+                'Station Name': f'NOAA Station {station_id}',
+                'State': 'NY',
+                'Country': 'United States',
+                'Latitude': 40.779,
+                'Longitude': -73.88,
+                'Elevation': 3.0,
+                'Start': '1973-01-01',
+                'End': '2023-01-02',
+                'Timezone Name': 'America/New_York',
+                'Timezone UTC': '-05:00'
+            }
+        else:
+            default_data = {
+                'Station ID': station_id,
+                'Station Name': f'Unknown Station {station_id}',
+                'Latitude': 0.0,
+                'Longitude': 0.0,
+                'Elevation': 0.0,
+                'Start': '2000',
+                'End': '2023'
+            }
+        
+        return WeatherStation(pd.Series(default_data))
+    
+    def _get_default_station_info(self, station_id: str) -> Dict[str, Any]:
+        """
+        Get default station information when database lookup fails.
+        
+        Parameters
+        ----------
+        station_id : str
+            Station ID.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Default station information.
+        """
+        station = self._get_default_station(station_id)
+        
+        if self.data_type == 'BOM':
+            return {
+                'Station Name': station.name,
+                'State': 'Unknown',
+                'Country': 'Australia',
+                'Latitude': station.latitude,
+                'Longitude': station.longitude,
+                'Elevation': station.elevation,
+                'Start': station.start_year,
+                'End': station.end_year,
+                'Timezone Name': 'Australia/Sydney',
+                'Timezone UTC': '+10:00'
+            }
+        elif self.data_type == 'NOAA':
+            return {
+                'Station Name': station.name,
+                'State': 'NY',
+                'Country': 'United States',
+                'Latitude': station.latitude,
+                'Longitude': station.longitude,
+                'Elevation': station.elevation,
+                'Start': station.start_year,
+                'End': station.end_year,
+                'Timezone Name': 'America/New_York',
+                'Timezone UTC': '-05:00'
+            }
+        else:
+            return {
+                'Station Name': station.name,
+                'State': 'Unknown',
+                'Country': 'Unknown',
+                'Latitude': station.latitude,
+                'Longitude': station.longitude,
+                'Elevation': station.elevation,
+                'Start': station.start_year,
+                'End': station.end_year,
+                'Timezone Name': 'UTC',
+                'Timezone UTC': '+00:00'
+            }
     
     def find_stations(self,
                      city: Optional[str] = None,
@@ -139,24 +347,24 @@ class WeatherStationDatabase:
         # Calculate distances
         lat1, lon1 = coordinates
         distances = self._haversine_distance(
-            lat1, self.stations['Latitude'].astype(float),
-            lon1, self.stations['Longitude'].astype(float)
+            lat1, self._data['Latitude'].astype(float),
+            lon1, self._data['Longitude'].astype(float)
         )
         
         # Add distances to DataFrame
-        self.stations = self.stations.copy()
-        self.stations['Distance (km)'] = distances
+        self._data = self._data.copy()
+        self._data['Distance (km)'] = distances
         
         # Sort by distance
-        self.stations = self.stations.sort_values('Distance (km)')
+        self._data = self._data.sort_values('Distance (km)')
         
         # Filter results
         if nearest is not None:
-            results = self.stations.head(nearest)
+            results = self._data.head(nearest)
         elif radius is not None:
-            results = self.stations[self.stations['Distance (km)'] <= radius]
+            results = self._data[self._data['Distance (km)'] <= radius]
         else:
-            results = self.stations
+            results = self._data
         
         # Convert to station objects
         return [WeatherStation(row) for _, row in results.iterrows()]
