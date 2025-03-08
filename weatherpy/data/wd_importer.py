@@ -20,12 +20,7 @@ from abc import ABC, abstractmethod
 from .wd_stations import WeatherStationDatabase
 from .wd_base import WeatherData
 
-# Import preparation modules
-# from ._noaa_preparation import _fix_NOAA_dimensions as fix_noaa_dimensions
-# from ._noaa_preparation import _noaa_date_bounds
-# from ._bom_preparation import _import_bomhistoric, _bom_date_bounds
-
-class WeatherDataImporter(WeatherData, ABC):
+class WeatherDataImporter(ABC):
     """
     Abstract base class for importing weather data.
     
@@ -33,8 +28,6 @@ class WeatherDataImporter(WeatherData, ABC):
     different sources. It handles caching, date bounds, and timezone conversions.
     Subclasses must implement the _import_from_source method.
     """
-    
-    API_ENDPOINT = "https://www.ncdc.noaa.gov/cdo-web/api/v2/data?"
     
     def __init__(self, 
                  station_id: str,
@@ -44,29 +37,7 @@ class WeatherDataImporter(WeatherData, ABC):
                  year_end: Optional[int] = None,
                  interval: Optional[int] = None,
                  save_raw: bool = False):
-        """
-        Initialize the importer.
-        
-        Parameters
-        ----------
-        station_id : str
-            Station ID.
-        data_type : str, optional
-            Type of data to import. The default is 'BOM'.
-        time_zone : str, optional
-            Time zone. The default is None.
-        year_start : int, optional
-            Start year. The default is None.
-        year_end : int, optional
-            End year. The default is None.
-        interval : int, optional
-            Interval in minutes. The default is None.
-        save_raw : bool, optional
-            Save raw data. The default is False.
-        """
-        # Initialize with empty DataFrame
-        super().__init__(pd.DataFrame())
-        
+        """Initialize the importer."""
         self._station_id = station_id
         self._data_type = data_type
         
@@ -95,49 +66,6 @@ class WeatherDataImporter(WeatherData, ABC):
         
         # Get timezone
         self._timezone = pytz.timezone(self._station_info['Timezone Name'])
-        
-        # Mapping of NOAA field names to our names
-        self._names = {
-            'STATION': 'Station',
-            'DATE': 'UTC',
-            'LATITUDE': 'Latitude',
-            'LONGITUDE': 'Longitude',
-            'ELEVATION': 'Elevation',
-            'NAME': 'Name',
-            'REPORT_TYPE': 'ReportType',
-            'SOURCE': 'Source',
-            'HourlyDewPointTemperature': 'DewPointTemp',
-            'HourlyDryBulbTemperature': 'Temperature',
-            'HourlyPrecipitation': 'RainCumulative',
-            'HourlyPresentWeatherType': 'PresentWeather',
-            'HourlyPressureChange': 'PressureChange',
-            'HourlyPressureTendency': 'PressureTendency',
-            'HourlyRelativeHumidity': 'RelativeHumidity',
-            'HourlySeaLevelPressure': 'SeaLevelPressure',
-            'HourlyStationPressure': 'StationPressure',
-            'HourlyVisibility': 'Visibility',
-            'HourlyWetBulbTemperature': 'WetBulbTemp',
-            'HourlyWindDirection': 'WindDir',
-            'HourlyWindSpeed': 'WindSpeed',
-            'Sunrise': 'Sunrise',
-            'Sunset': 'Sunset',
-            'CloudLayerHeight': 'CloudHgt',
-            'CloudLayerOktas': 'CloudOktas',
-            'WindType': 'WindType',
-            'QualityControlWindSpeed': 'QCWindSpeed',
-            'QualityControlName': 'QCName',
-            'QualityControlWindDirection': 'QCWindDir'
-        }
-        
-        # Groups of fields that must be processed together
-        self._mandatory_section_groups = {
-            'WND': ['WindDir', 'WindSpeed', 'WindType', 'QCWindSpeed', 'QCWindDir'],
-            'CIG': ['CloudHgt', 'QCName'],
-            'VIS': ['Visibility', 'QCName'],
-            'TMP': ['Temperature', 'QCName'],
-            'DEW': ['DewPointTemp', 'QCName'],
-            'SLP': ['SeaLevelPressure', 'QCName']
-        }
         
         # Validate inputs
         self._validate_inputs()
@@ -410,7 +338,7 @@ class WeatherDataImporter(WeatherData, ABC):
         
         return df
     
-    def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=None) -> Tuple[pd.DataFrame, int, int]:
+    def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=None) -> WeatherData:
         """
         Import data from the source.
         
@@ -429,8 +357,8 @@ class WeatherDataImporter(WeatherData, ABC):
         
         Returns
         -------
-        Tuple[pandas.DataFrame, int, int]
-            (data, yearStart, yearEnd)
+        WeatherData
+            Imported weather data object
         """
         # Use instance variables if parameters are not provided
         yearStart = yearStart if yearStart is not None else self._year_start
@@ -448,7 +376,7 @@ class WeatherDataImporter(WeatherData, ABC):
             try:
                 data = self._read_from_cache()
                 if data is not None:
-                    return data, yearStart, yearEnd
+                    return WeatherData(data)
             except Exception as e:
                 print(f"Error reading from cache: {e}")
         
@@ -509,7 +437,8 @@ class WeatherDataImporter(WeatherData, ABC):
             actual_start_year = yearStart
             actual_end_year = yearEnd
         
-        return data, actual_start_year, actual_end_year
+        # Create and return a WeatherData object
+        return WeatherData(data)
     
     @abstractmethod
     def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
