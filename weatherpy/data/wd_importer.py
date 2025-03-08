@@ -61,11 +61,18 @@ class WeatherDataImporter(ABC):
         # Initialize station database
         self._station_db = WeatherStationDatabase(data_type)
         
-        # Get station info
-        self._station_info = self.station_info
+        # Get station information
+        try:
+            self._station_info = self._station_db.get_station_info(self._station_id)
+        except Exception as e:
+            print(f"Warning: Could not get station information: {e}")
+            self._station_info = {}
         
-        # Get timezone
-        self._timezone = pytz.timezone(self._station_info['Timezone Name'])
+        # Get timezone from station info if not provided
+        if time_zone is None:
+            self._timezone = self._station_info.get('Timezone Name', 'UTC')
+        else:
+            self._timezone = time_zone
         
         # Validate inputs
         self._validate_inputs()
@@ -109,18 +116,6 @@ class WeatherDataImporter(ABC):
         """Get the save_raw flag."""
         return self._save_raw
     
-    @property
-    def station_info(self) -> Dict[str, Any]:
-        """
-        Get station information.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Station information.
-        """
-        return self._station_db.get_station_info(self._station_id)
-    
     def _validate_inputs(self):
         """Validate inputs."""
         # Validate station ID
@@ -146,33 +141,39 @@ class WeatherDataImporter(ABC):
         Returns
         -------
         Tuple[int, int]
-            Validated start and end years.
+            Start and end years.
         """
-        # Get station info
-        station_info = self.station_info
+        # Get station information
+        try:
+            station_info = self._station_db.get_station_info(self._station_id)
+        except Exception as e:
+            print(f"Warning: Could not get station information: {e}")
+            station_info = {}
         
-        # Get start and end years
-        if self._data_type == 'BOM':
-            start_year = int(station_info['Start'])
-            end_year = int(station_info['End'])
-        elif self._data_type == 'NOAA':
-            # NOAA dates are in format 'YYYY-MM-DD'
-            start_year = int(station_info['Start'].split('-')[0])
-            end_year = int(station_info['End'].split('-')[0])
-        else:
-            start_year = 1900
-            end_year = 2100
+        # Get station start and end years
+        station_start_year = station_info.get('Start Year', 1900)
+        station_end_year = station_info.get('End Year', datetime.now().year)
+        
+        # Convert to integers if they are strings
+        if isinstance(station_start_year, str):
+            station_start_year = int(station_start_year)
+        if isinstance(station_end_year, str):
+            station_end_year = int(station_end_year)
+        
+        # Use user-provided years if they are within the station's range
+        start_year = self._year_start if self._year_start is not None else station_start_year
+        end_year = self._year_end if self._year_end is not None else station_end_year
         
         # Validate years
-        if self._year_start < start_year:
-            print(f"Warning: Start year {self._year_start} is earlier than station's first year {start_year}")
-            self._year_start = start_year
+        if start_year < station_start_year:
+            print(f"Warning: Start year {start_year} is before station start year {station_start_year}. Using station start year.")
+            start_year = station_start_year
         
-        if self._year_end > end_year:
-            print(f"Warning: End year {self._year_end} is later than station's last year {end_year}")
-            self._year_end = end_year
+        if end_year > station_end_year:
+            print(f"Warning: End year {end_year} is after station end year {station_end_year}. Using station end year.")
+            end_year = station_end_year
         
-        return self._year_start, self._year_end
+        return start_year, end_year
     
     @staticmethod
     def _get_temp_folder() -> str:
@@ -263,23 +264,36 @@ class WeatherDataImporter(ABC):
         Tuple[datetime, datetime]
             Start and end datetime bounds.
         """
-        # Get station timezone
-        station_info = self.station_info
-        timezone_local = pytz.timezone(station_info['Timezone Name'])
+        # Get station information
+        try:
+            station_info = self._station_db.get_station_info(self._station_id)
+        except Exception as e:
+            print(f"Warning: Could not get station information: {e}")
+            station_info = {}
+        
+        # Get station start and end years
+        station_start_year = station_info.get('Start Year', 1900)
+        station_end_year = station_info.get('End Year', datetime.now().year)
+        
+        # Convert to integers if they are strings
+        if isinstance(station_start_year, str):
+            station_start_year = int(station_start_year)
+        if isinstance(station_end_year, str):
+            station_end_year = int(station_end_year)
+        
+        # Use user-provided years if they are within the station's range
+        start_year = self._year_start if self._year_start is not None else station_start_year
+        end_year = self._year_end if self._year_end is not None else station_end_year
         
         # Create date bounds in local timezone
         if self._data_type == 'BOM':
             # For BOM, we use the start and end of the year
-            start_date = timezone_local.localize(
-                datetime.strptime(f"{self._year_start} 01 01 00:00", '%Y %m %d %H:%M'))
-            end_date = timezone_local.localize(
-                datetime.strptime(f"{self._year_end} 12 31 23:59", '%Y %m %d %H:%M'))
+            start_date = datetime(start_year, 1, 1)
+            end_date = datetime(end_year, 12, 31, 23, 59, 59)
         elif self._data_type == 'NOAA':
             # For NOAA, we add buffer days before and after
-            start_date = timezone_local.localize(
-                datetime.strptime(f"{self._year_start-1} 12 25 00:00", '%Y %m %d %H:%M'))
-            end_date = timezone_local.localize(
-                datetime.strptime(f"{self._year_end+1} 01 05 23:59", '%Y %m %d %H:%M'))
+            start_date = datetime(start_year - 1, 12, 25)
+            end_date = datetime(end_year + 1, 1, 5, 23, 59, 59)
         else:
             raise ValueError(f"Unsupported data type: {self._data_type}")
         
@@ -800,7 +814,7 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
     
     def _make_api_request(self, url: str, params: Dict[str, Any], max_retries: int = 3) -> Optional[Dict[str, Any]]:
         """
-        Make an API request with exponential backoff retry.
+        Make API request with retries.
         
         Parameters
         ----------
@@ -858,14 +872,3 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         
         print(f"Failed to make API request after {max_retries} retries")
         return None
-
-    def get_station_info(self) -> Dict[str, Any]:
-        """
-        Get station information.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Station information.
-        """
-        return self._station_db.get_station_info(self.station_id)
