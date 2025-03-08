@@ -6,11 +6,12 @@ import pandas as pd
 import numpy as np
 import logging
 from typing import List, Dict, Any, Optional, Union
+from .wd_stations import WeatherStation
 
 class WeatherData:
     """Base class for weather data operations."""
     
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, station: Optional[WeatherStation] = None):
         """
         Initialize with weather data.
         
@@ -18,8 +19,63 @@ class WeatherData:
         ----------
         data : pd.DataFrame
             Weather data DataFrame
+        station : Optional[WeatherStation], optional
+            Weather station information, by default None
         """
         self.data = data.copy()
+        self._station = station
+        
+    @property
+    def station(self) -> Optional[WeatherStation]:
+        """
+        Get the weather station information.
+        
+        Returns
+        -------
+        Optional[WeatherStation]
+            Weather station information
+        """
+        return self._station
+        
+    @station.setter
+    def station(self, station: WeatherStation):
+        """
+        Set the weather station information.
+        
+        Parameters
+        ----------
+        station : WeatherStation
+            Weather station information
+        """
+        self._station = station
+        
+    def get_station_info(self) -> Dict[str, Any]:
+        """
+        Get station information as a dictionary.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Station information
+        
+        Raises
+        ------
+        ValueError
+            If no station information is available
+        """
+        if self._station is None:
+            raise ValueError("No station information available")
+        
+        return {
+            'code': self._station.code,
+            'name': self._station.name,
+            'latitude': self._station.latitude,
+            'longitude': self._station.longitude,
+            'elevation': self._station.elevation,
+            'start_year': self._station.start_year,
+            'end_year': self._station.end_year,
+            'available_measurements': self._station.available_measurements
+        }
         
     def get_data(self) -> pd.DataFrame:
         """

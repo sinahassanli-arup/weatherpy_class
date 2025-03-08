@@ -17,7 +17,7 @@ import zipfile
 import io
 from pathlib import Path
 from abc import ABC, abstractmethod
-from .wd_stations import WeatherStationDatabase
+from .wd_stations import WeatherStationDatabase, WeatherStation
 from .wd_base import WeatherData
 
 class WeatherDataImporter(ABC):
@@ -400,6 +400,77 @@ class WeatherDataImporter(ABC):
             Imported data.
         """
         pass
+
+    def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=None) -> WeatherData:
+        """
+        Import data from the source.
+        
+        Parameters
+        ----------
+        yearStart : int, optional
+            Start year. If None, uses the value from initialization.
+        yearEnd : int, optional
+            End year. If None, uses the value from initialization.
+        interval : int, optional
+            Interval in minutes. If None, uses the value from initialization.
+        timeZone : str, optional
+            Time zone. If None, uses the value from initialization.
+        save_raw : bool, optional
+            Save raw data. If None, uses the value from initialization.
+        
+        Returns
+        -------
+        WeatherData
+            Imported weather data object
+        """
+        # Use instance variables if parameters are not provided
+        yearStart = yearStart if yearStart is not None else self._year_start
+        yearEnd = yearEnd if yearEnd is not None else self._year_end
+        interval = interval if interval is not None else self._interval
+        timeZone = timeZone if timeZone is not None else self._time_zone
+        save_raw = save_raw if save_raw is not None else self._save_raw
+        
+        # Validate years
+        if yearStart > yearEnd:
+            raise ValueError("yearStart must be less than or equal to yearEnd")
+        
+        # Try to read from cache if save_raw is enabled
+        if save_raw:
+            try:
+                data = self._read_from_cache()
+                if data is not None:
+                    # Get station information
+                    try:
+                        station = self._station_db.get_station(self._station_id)
+                    except Exception as e:
+                        print(f"Warning: Could not get station information: {e}")
+                        station = None
+                    return WeatherData(data, station)
+            except Exception as e:
+                print(f"Error reading from cache: {e}")
+        
+        # Import data from source
+        data = self._import_from_source(yearStart, yearEnd, interval, timeZone)
+        
+        # Process and filter data
+        data = self._process_data(data, yearStart, yearEnd, timeZone)
+        
+        # Save to cache if requested
+        if save_raw:
+            try:
+                self._save_to_cache(data)
+            except Exception as e:
+                print(f"Error saving to cache: {e}")
+        
+        # Get station information
+        try:
+            station = self._station_db.get_station(self._station_id)
+        except Exception as e:
+            print(f"Warning: Could not get station information: {e}")
+            station = None
+        
+        # Create and return a WeatherData object with station information
+        return WeatherData(data, station)
 
 class BOMWeatherDataImporter(WeatherDataImporter):
     """
