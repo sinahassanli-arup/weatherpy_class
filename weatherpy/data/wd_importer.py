@@ -700,6 +700,48 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         'GUST': 'wind_gust_kmh'
     }
     
+    # Move _names and _mandatory_section_groups here
+    _names = {
+        'STATION': 'Station',
+        'DATE': 'UTC',
+        'LATITUDE': 'Latitude',
+        'LONGITUDE': 'Longitude',
+        'ELEVATION': 'Elevation',
+        'NAME': 'Name',
+        'REPORT_TYPE': 'ReportType',
+        'SOURCE': 'Source',
+        'HourlyDewPointTemperature': 'DewPointTemp',
+        'HourlyDryBulbTemperature': 'Temperature',
+        'HourlyPrecipitation': 'RainCumulative',
+        'HourlyPresentWeatherType': 'PresentWeather',
+        'HourlyPressureChange': 'PressureChange',
+        'HourlyPressureTendency': 'PressureTendency',
+        'HourlyRelativeHumidity': 'RelativeHumidity',
+        'HourlySeaLevelPressure': 'SeaLevelPressure',
+        'HourlyStationPressure': 'StationPressure',
+        'HourlyVisibility': 'Visibility',
+        'HourlyWetBulbTemperature': 'WetBulbTemp',
+        'HourlyWindDirection': 'WindDir',
+        'HourlyWindSpeed': 'WindSpeed',
+        'Sunrise': 'Sunrise',
+        'Sunset': 'Sunset',
+        'CloudLayerHeight': 'CloudHgt',
+        'CloudLayerOktas': 'CloudOktas',
+        'WindType': 'WindType',
+        'QualityControlWindSpeed': 'QCWindSpeed',
+        'QualityControlName': 'QCName',
+        'QualityControlWindDirection': 'QCWindDir'
+    }
+    
+    _mandatory_section_groups = {
+        'WND': ['WindDir', 'WindSpeed', 'WindType', 'QCWindSpeed', 'QCWindDir'],
+        'CIG': ['CloudHgt', 'QCName'],
+        'VIS': ['Visibility', 'QCName'],
+        'TMP': ['Temperature', 'QCName'],
+        'DEW': ['DewPointTemp', 'QCName'],
+        'SLP': ['SeaLevelPressure', 'QCName']
+    }
+    
     def __init__(self, station_id: str, api_token: Optional[str] = None, **kwargs):
         """
         Initialize the NOAA weather data importer.
@@ -761,45 +803,44 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Imported data.
         """
-        # Try to read from cache first
         cached_data = self._read_from_cache()
         if cached_data is not None:
             print(f"Using cached data for NOAA station {self._station_id}")
             return cached_data
-        
-        # Get date bounds
+
         start_date, end_date = self._get_date_bounds()
-        
-        # Import data from NOAA
         print(f"Importing NOAA data for station {self._station_id} from {yearStart} to {yearEnd}")
-        
-        # Import data using legacy function
-        from weatherpy_legacy.data._noaa_preparation import _getNOAA_api
-        
-        # Import data - note the parameter order matches the legacy function
-        data = _getNOAA_api(
-            ID=self._station_id,
-            yearStart=yearStart,
-            yearEnd=yearEnd,
-            timeZone=timeZone
+
+        # Directly implement the logic from _getNOAA_api
+        data = self._make_api_request(
+            url=self.API_ENDPOINT,
+            params={
+                'datasetid': 'GHCND',
+                'stationid': f'GHCND:{self._station_id}',
+                'startdate': f'{yearStart}-01-01',
+                'enddate': f'{yearEnd}-12-31',
+                'units': 'metric',
+                'limit': 1000
+            }
         )
-        
-        # Filter data to match the legacy behavior exactly
+
+        if data is None:
+            raise ValueError("Failed to retrieve data from NOAA API")
+
+        df = pd.DataFrame(data['results'])
+        df.rename(columns=self._noaa_names, inplace=True)
+
         if timeZone == 'LocalTime':
-            # For LocalTime, filter to include only data from the requested years
-            # This matches the behavior in the legacy function
             local_time_col = 'LocalTime'
-            if local_time_col in data.columns:
+            if local_time_col in df.columns:
                 start_date_local = pd.Timestamp(f"{yearStart}-01-01", tz=self._timezone)
                 end_date_local = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=self._timezone)
-                data = data[(data[local_time_col] >= start_date_local) & 
-                           (data[local_time_col] <= end_date_local)]
-        
-        # Save to cache
+                df = df[(df[local_time_col] >= start_date_local) & (df[local_time_col] <= end_date_local)]
+
         if self._save_raw:
-            self._save_to_cache(data)
-        
-        return data
+            self._save_to_cache(df)
+
+        return df
     
     def _process_noaa_data(self, data: pd.DataFrame, timeZone: str) -> pd.DataFrame:
         """
