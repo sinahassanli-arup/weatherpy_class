@@ -292,109 +292,43 @@ class WeatherDataImporter(ABC):
             # For LocalTime, return the local timezone dates
             return start_date, end_date
     
-    @staticmethod
-    def convert_timezone(data: pd.DataFrame, from_tz: str, to_tz: str) -> pd.DataFrame:
+    def _standardize_timezone(self, data: pd.DataFrame, to_timezone: str) -> pd.DataFrame:
         """
-        Convert DataFrame timezone.
+        Standardize timezone handling for weather data.
         
         Parameters
         ----------
-        data : pandas.DataFrame
-            Data to convert.
-        from_tz : str
-            Source timezone.
-        to_tz : str
-            Target timezone.
-        
+        data : pd.DataFrame
+            Input data with datetime index
+        to_timezone : str
+            Target timezone ('UTC' or 'LocalTime')
+            
         Returns
         -------
-        pandas.DataFrame
-            Converted data.
+        pd.DataFrame
+            Data with standardized timezone columns and index
         """
-        # Make a copy to avoid modifying the original
-        df = data.copy()
-        
-        # Check if the index is timezone-aware
-        if not hasattr(df.index, 'tz') or df.index.tz is None:
+        if not hasattr(data.index, 'tz') or data.index.tz is None:
             raise ValueError("DataFrame index must be timezone-aware")
+            
+        df = data.copy()
+        station_tz = self._timezone
         
-        # Convert index timezone
-        if to_tz == 'UTC':
-            # Convert to UTC
+        # Standardize timezone conversion
+        if to_timezone == 'UTC':
+            # Convert index to UTC
             df.index = df.index.tz_convert('UTC')
-            # Rename index to 'UTC'
             df.index.name = 'UTC'
-            # Add LocalTime column if it doesn't exist
-            if 'LocalTime' not in df.columns:
-                df['LocalTime'] = df.index.tz_convert(from_tz)
-        else:
-            # Convert to local timezone
-            df.index = df.index.tz_convert(to_tz)
-            # Rename index to 'LocalTime'
+            # Add LocalTime column
+            df['LocalTime'] = df.index.tz_convert(station_tz)
+        else:  # LocalTime
+            # Convert index to station timezone
+            df.index = df.index.tz_convert(station_tz)
             df.index.name = 'LocalTime'
-            # Add UTC column if it doesn't exist
-            if 'UTC' not in df.columns:
-                df['UTC'] = df.index.tz_convert('UTC')
-        
+            # Add UTC column
+            df['UTC'] = df.index.tz_convert('UTC')
+            
         return df
-    
-    def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=None) -> WeatherData:
-        """
-        Import data from the source.
-        
-        Parameters
-        ----------
-        yearStart : int, optional
-            Start year. If None, uses the value from initialization.
-        yearEnd : int, optional
-            End year. If None, uses the value from initialization.
-        interval : int, optional
-            Interval in minutes. If None, uses the value from initialization.
-        timeZone : str, optional
-            Time zone. If None, uses the value from initialization.
-        save_raw : bool, optional
-            Save raw data. If None, uses the value from initialization.
-        
-        Returns
-        -------
-        WeatherData
-            Imported weather data object
-        """
-        # Use instance variables if parameters are not provided
-        yearStart = yearStart if yearStart is not None else self._year_start
-        yearEnd = yearEnd if yearEnd is not None else self._year_end
-        interval = interval if interval is not None else self._interval
-        timeZone = timeZone if timeZone is not None else self._time_zone
-        save_raw = save_raw if save_raw is not None else self._save_raw
-        
-        # Validate years
-        if yearStart > yearEnd:
-            raise ValueError("yearStart must be less than or equal to yearEnd")
-        
-        # Try to read from cache if save_raw is enabled
-        if save_raw:
-            try:
-                data = self._read_from_cache()
-                if data is not None:
-                    return WeatherData(data)
-            except Exception as e:
-                print(f"Error reading from cache: {e}")
-        
-        # Import data from source
-        data = self._import_from_source(yearStart, yearEnd, interval, timeZone)
-        
-        # Process and filter data
-        data = self._process_data(data, yearStart, yearEnd, timeZone)
-        
-        # Save to cache if requested
-        if save_raw:
-            try:
-                self._save_to_cache(data)
-            except Exception as e:
-                print(f"Error saving to cache: {e}")
-        
-        # Create and return a WeatherData object
-        return WeatherData(data)
     
     def _process_data(self, data: pd.DataFrame, yearStart: int, yearEnd: int, timeZone: str) -> pd.DataFrame:
         """
@@ -416,41 +350,28 @@ class WeatherDataImporter(ABC):
         pd.DataFrame
             Processed and filtered data
         """
-        # Determine date bounds for filtering
-        if timeZone == 'LocalTime':
-            station_timezone = pytz.timezone(self._station_info['Timezone Name'])
-            start_date = pd.Timestamp(f"{yearStart}-01-01", tz=station_timezone)
-            end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=station_timezone)
-            date_col = 'LocalTime'
-        else:  # UTC
-            start_date = pd.Timestamp(f"{yearStart}-01-01", tz='UTC')
-            end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz='UTC')
-            date_col = 'UTC'
+        # Convert timezone first
+        data = self._standardize_timezone(data, timeZone)
         
-        # Special handling for BOM data with UTC timezone to match legacy implementation exactly
+        # Get the appropriate date column for filtering
+        date_col = data.index.name
+        
+        # Create date bounds in the appropriate timezone
+        tz = pytz.UTC if timeZone == 'UTC' else self._timezone
+        start_date = pd.Timestamp(f"{yearStart}-01-01", tz=tz)
+        end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=tz)
+        
+        # Filter data
         if self._data_type == 'BOM' and timeZone == 'UTC':
-            print(f"Filtering data by year range: {yearStart} to {yearEnd}")
+            # Special case for BOM UTC data
             data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
         else:
-            # Filter data by date range
-            if date_col in data.columns:
-                data = data[(data[date_col] >= start_date) & (data[date_col] <= end_date)]
-            elif date_col == data.index.name:
-                data = data[(data.index >= start_date) & (data.index <= end_date)]
-            else:
-                print(f"Warning: {date_col} not found in data. Skipping date filtering.")
+            data = data[(data.index >= start_date) & (data.index <= end_date)]
         
         # Log import status
         if len(data) > 0:
-            if date_col in data.columns:
-                actual_start_year = data[date_col].min().year
-                actual_end_year = data[date_col].max().year
-            elif date_col == data.index.name:
-                actual_start_year = data.index.min().year
-                actual_end_year = data.index.max().year
-            else:
-                actual_start_year = yearStart
-                actual_end_year = yearEnd
+            actual_start_year = data.index.min().year
+            actual_end_year = data.index.max().year
             print(f"Data imported successfully for years {actual_start_year} to {actual_end_year}")
         else:
             print("No data found for the specified date range")
@@ -600,7 +521,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Processed data.
         """
-        # Make a copy to avoid modifying the original
         df = data.copy()
         
         # Rename columns to standardized names
@@ -613,13 +533,8 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             if col not in df.columns and col not in ['obs_period_time_utc']:
                 df[col] = np.nan
         
-        # Set index name based on timezone
-        if timeZone == 'UTC':
-            df.index.name = 'UTC'
-        else:
-            df.index.name = 'LocalTime'
-        
-        return df
+        # Standardize timezone
+        return self._standardize_timezone(df, timeZone)
 
 class NOAAWeatherDataImporter(WeatherDataImporter):
     """
@@ -804,15 +719,13 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Processed data.
         """
-        # Rename the time column based on the requested time zone
-        if timeZone == 'UTC':
-            # If UTC is requested, rename the index to LocalTime (to match legacy behavior)
-            data = data.rename_axis('LocalTime')
-        else:
-            # If local time is requested, rename the index to LocalTime
-            data = data.rename_axis('LocalTime')
+        df = data.copy()
         
-        return data
+        # Rename columns using NOAA field mappings
+        df.rename(columns=self._noaa_names, inplace=True)
+        
+        # Standardize timezone
+        return self._standardize_timezone(df, timeZone)
     
     def _make_api_request(self, url: str, params: Dict[str, Any], max_retries: int = 3) -> Optional[Dict[str, Any]]:
         """
