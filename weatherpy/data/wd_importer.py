@@ -1131,10 +1131,14 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         Tuple[datetime, datetime]
             Start and end datetime bounds
         """
+        # Ensure year values are valid (not exceeding reasonable limits)
+        start_year = max(1900, min(self.year_start, 2100))
+        end_year = max(1900, min(self.year_end, 2100))
+        
         start_date = pytz.UTC.localize(
-            datetime.strptime(f"{self.year_start} 01 01 00:00", '%Y %m %d %H:%M'))
+            datetime.strptime(f"{start_year} 01 01 00:00", '%Y %m %d %H:%M'))
         end_date = pytz.UTC.localize(
-            datetime.strptime(f"{self.year_end} 12 31 23:59", '%Y %m %d %H:%M'))
+            datetime.strptime(f"{end_year} 12 31 23:59", '%Y %m %d %H:%M'))
         
         if self.time_zone == 'UTC':
             return start_date, end_date
@@ -1142,11 +1146,23 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         elif self.time_zone == 'LocalTime':
             station_info = self.get_station_info()
             timezone_offset = station_info['Timezone UTC']
-            tz_hours = int(timezone_offset[5:7])
-            tz_mins = int(timezone_offset[8:10])
-            tz_delta = timedelta(hours=tz_hours, minutes=tz_mins)
-            if timezone_offset[4:5] == '-':
-                tz_delta = -tz_delta
+            try:
+                # Check if the timezone offset has the expected format
+                if len(timezone_offset) >= 9 and timezone_offset[4] in ['+', '-']:
+                    tz_hours = int(timezone_offset[5:7])
+                    tz_mins = int(timezone_offset[8:10] if len(timezone_offset) >= 10 else '00')
+                    tz_delta = timedelta(hours=tz_hours, minutes=tz_mins)
+                    if timezone_offset[4] == '-':
+                        tz_delta = -tz_delta
+                else:
+                    # Default to -05:00 for US if format is incorrect
+                    print(f"Warning: Invalid timezone offset format: {timezone_offset}. Using default -05:00.")
+                    tz_delta = timedelta(hours=-5)
+            except (ValueError, IndexError):
+                # Default to -05:00 for US if parsing fails
+                print(f"Warning: Failed to parse timezone offset: {timezone_offset}. Using default -05:00.")
+                tz_delta = timedelta(hours=-5)
+                
             start_date = start_date - tz_delta
             end_date = end_date - tz_delta
             return start_date, end_date
