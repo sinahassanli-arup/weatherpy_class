@@ -290,7 +290,18 @@ class WeatherDataImporter:
         # Get date bounds
         start_date, end_date = self._get_date_bounds()
         
-        # Filter by date range
+        # Filter by date range, ensuring timezone-aware comparison
+        if data.index.tzinfo is None:
+            # If data index is timezone-naive, localize it to UTC
+            data.index = data.index.tz_localize('UTC')
+            
+        # Ensure start_date and end_date are timezone-aware
+        if start_date.tzinfo is None:
+            start_date = pytz.UTC.localize(start_date)
+        if end_date.tzinfo is None:
+            end_date = pytz.UTC.localize(end_date)
+            
+        # Now filter the data
         data_filtered = data[(data.index >= start_date) & (data.index <= end_date)]
         
         # Save to cache if requested
@@ -298,8 +309,12 @@ class WeatherDataImporter:
             self._save_to_cache(data)
         
         # Get actual start and end years from the data
-        start_year = data_filtered.index.year.min()
-        end_year = data_filtered.index.year.max()
+        if len(data_filtered) > 0:
+            start_year = data_filtered.index.year.min()
+            end_year = data_filtered.index.year.max()
+        else:
+            start_year = self.year_start
+            end_year = self.year_end
         
         return data_filtered, start_year, end_year
         
