@@ -383,12 +383,42 @@ class WeatherDataImporter(ABC):
         # Import data from source
         data = self._import_from_source(yearStart, yearEnd, interval, timeZone)
         
+        # Process and filter data
+        data = self._process_data(data, yearStart, yearEnd, timeZone)
+        
+        # Save to cache if requested
+        if save_raw:
+            try:
+                self._save_to_cache(data)
+            except Exception as e:
+                print(f"Error saving to cache: {e}")
+        
+        # Create and return a WeatherData object
+        return WeatherData(data)
+    
+    def _process_data(self, data: pd.DataFrame, yearStart: int, yearEnd: int, timeZone: str) -> pd.DataFrame:
+        """
+        Process and filter imported data.
+        
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Raw imported data
+        yearStart : int
+            Start year
+        yearEnd : int
+            End year
+        timeZone : str
+            Time zone
+            
+        Returns
+        -------
+        pd.DataFrame
+            Processed and filtered data
+        """
         # Determine date bounds for filtering
         if timeZone == 'LocalTime':
-            # Get the station timezone
-            station_info = self.station_info
-            station_timezone = pytz.timezone(station_info['Timezone Name'])
-            
+            station_timezone = pytz.timezone(self._station_info['Timezone Name'])
             start_date = pd.Timestamp(f"{yearStart}-01-01", tz=station_timezone)
             end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=station_timezone)
             date_col = 'LocalTime'
@@ -399,13 +429,10 @@ class WeatherDataImporter(ABC):
         
         # Special handling for BOM data with UTC timezone to match legacy implementation exactly
         if self._data_type == 'BOM' and timeZone == 'UTC':
-            # For BOM with UTC, we need to match the legacy implementation exactly
-            # The legacy implementation includes all data from the start and end years
-            # without filtering by the exact UTC date bounds
             print(f"Filtering data by year range: {yearStart} to {yearEnd}")
             data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
         else:
-            # Filter data by date range if the date_col exists in the dataframe
+            # Filter data by date range
             if date_col in data.columns:
                 data = data[(data[date_col] >= start_date) & (data[date_col] <= end_date)]
             elif date_col == data.index.name:
@@ -413,14 +440,7 @@ class WeatherDataImporter(ABC):
             else:
                 print(f"Warning: {date_col} not found in data. Skipping date filtering.")
         
-        # Save to cache if requested
-        if save_raw:
-            try:
-                self._save_to_cache(data)
-            except Exception as e:
-                print(f"Error saving to cache: {e}")
-        
-        # Determine actual start and end years from the filtered data
+        # Log import status
         if len(data) > 0:
             if date_col in data.columns:
                 actual_start_year = data[date_col].min().year
@@ -434,11 +454,8 @@ class WeatherDataImporter(ABC):
             print(f"Data imported successfully for years {actual_start_year} to {actual_end_year}")
         else:
             print("No data found for the specified date range")
-            actual_start_year = yearStart
-            actual_end_year = yearEnd
         
-        # Create and return a WeatherData object
-        return WeatherData(data)
+        return data
     
     @abstractmethod
     def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
