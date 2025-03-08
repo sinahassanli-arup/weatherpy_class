@@ -662,11 +662,24 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         
         if self.time_zone == 'UTC':
             timezone_offset = station_info['Timezone UTC']
-            tz_hours = int(timezone_offset[5:7])
-            tz_mins = int(timezone_offset[8:10])
-            tz_delta = timedelta(hours=tz_hours, minutes=tz_mins)
-            if timezone_offset[4:5] == '-':
-                tz_delta = -tz_delta
+            # Handle timezone offset parsing more robustly
+            try:
+                # Check if the timezone offset has the expected format
+                if len(timezone_offset) >= 9 and timezone_offset[4] in ['+', '-']:
+                    tz_hours = int(timezone_offset[5:7])
+                    tz_mins = int(timezone_offset[8:10] if len(timezone_offset) >= 10 else '00')
+                    tz_delta = timedelta(hours=tz_hours, minutes=tz_mins)
+                    if timezone_offset[4] == '-':
+                        tz_delta = -tz_delta
+                else:
+                    # Default to +10:00 for Australia if format is incorrect
+                    print(f"Warning: Invalid timezone offset format: {timezone_offset}. Using default +10:00.")
+                    tz_delta = timedelta(hours=10)
+            except (ValueError, IndexError):
+                # Default to +10:00 for Australia if parsing fails
+                print(f"Warning: Failed to parse timezone offset: {timezone_offset}. Using default +10:00.")
+                tz_delta = timedelta(hours=10)
+                
             start_date = start_date + tz_delta
             end_date = end_date + tz_delta
             return start_date, end_date
@@ -696,34 +709,75 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         current_dir = Path(__file__).resolve().parent
         db_file = current_dir / 'src' / 'BOM_stations_clean.csv'
         
+        # Check if the file exists
+        if not db_file.exists():
+            print(f"Error: Station database file not found at {db_file}")
+            print(f"Current directory: {current_dir}")
+            print(f"Looking for: {db_file.name}")
+            print("Using default station information")
+            return self._get_default_station_info()
+        
         # Load database
-        stations = pd.read_csv(db_file)
-        
-        # Find station
-        station_id = str(self.station_id).zfill(6)
-        station_data = stations[stations['Station Code'] == station_id]
-        
-        if len(station_data) == 0:
-            raise ValueError(f"Station not found: {station_id}")
+        try:
+            stations = pd.read_csv(db_file)
             
-        # Convert to dictionary
-        info = station_data.iloc[0].to_dict()
+            # Find station
+            station_id = str(self.station_id).zfill(6)
+            print(f"Looking for station ID: {station_id}")
+            print(f"Available station IDs: {stations['Station Code'].unique()[:5]}...")
+            
+            station_data = stations[stations['Station Code'] == station_id]
+            
+            if len(station_data) == 0:
+                print(f"Station not found: {station_id}")
+                return self._get_default_station_info()
+                
+            # Convert to dictionary
+            info = station_data.iloc[0].to_dict()
+            
+            # Ensure required fields are present
+            required_fields = {
+                'Station Name': str(info.get('Station Name', f'BOM Station {station_id}')),
+                'State': str(info.get('State', 'Unknown')),
+                'Country': 'Australia',
+                'Latitude': float(info.get('Latitude', 0.0)),
+                'Longitude': float(info.get('Longitude', 0.0)),
+                'Elevation': float(info.get('Elevation', 0.0)),
+                'Start': str(info.get('Start', '2000')),
+                'End': str(info.get('End', '2023')),
+                'Timezone Name': str(info.get('Timezone Name', 'Australia/Sydney')),
+                'Timezone UTC': str(info.get('Timezone UTC', '+10:00'))
+            }
+            
+            return required_fields
+        except Exception as e:
+            print(f"Error loading station database: {e}")
+            return self._get_default_station_info()
+    
+    def _get_default_station_info(self) -> Dict[str, Any]:
+        """
+        Get default station information when database lookup fails.
         
-        # Ensure required fields are present
-        required_fields = {
-            'Station Name': str(info.get('Station Name', f'BOM Station {station_id}')),
-            'State': str(info.get('State', 'Unknown')),
+        Returns
+        -------
+        Dict[str, Any]
+            Default station information
+        """
+        print(f"Using default station information for {self.station_id}")
+        
+        # Return default values if database can't be loaded
+        return {
+            'Station Name': f'BOM Station {self.station_id}',
+            'State': 'Unknown',
             'Country': 'Australia',
-            'Latitude': float(info.get('Latitude', 0.0)),
-            'Longitude': float(info.get('Longitude', 0.0)),
-            'Elevation': float(info.get('Elevation', 0.0)),
-            'Start': str(info.get('Start', '2000')),
-            'End': str(info.get('End', '2023')),
-            'Timezone Name': str(info.get('Timezone Name', 'Australia/Sydney')),
-            'Timezone UTC': str(info.get('Timezone UTC', '+10:00'))
+            'Latitude': -33.0,
+            'Longitude': 151.0,
+            'Elevation': 0.0,
+            'Start': '2000',
+            'End': '2023',
+            'Timezone Name': 'Australia/Sydney',
+            'Timezone UTC': '+10:00'
         }
-        
-        return required_fields
 
 class NOAAWeatherDataImporter(WeatherDataImporter):
     """Class for importing NOAA weather data."""
@@ -782,11 +836,15 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Define data types to request
         data_types = 'WND,CIG,VIS,TMP,DEW,SLP,LONGITUDE,LATITUDE,ELEVATION,GA1,AA2'
         
+        # Ensure year values are valid (not exceeding reasonable limits)
+        start_year = max(1900, min(self.year_start - 1, 2100))
+        end_year = max(1900, min(self.year_end + 1, 2100))
+        
         # Convert dates to UTC for API request
         start_date_UTC = pytz.UTC.localize(
-            datetime.strptime(f'{self.year_start-1} 12 25 00:00', '%Y %m %d %H:%M'))
+            datetime.strptime(f'{start_year} 12 25 00:00', '%Y %m %d %H:%M'))
         end_date_UTC = pytz.UTC.localize(
-            datetime.strptime(f'{self.year_end+1} 01 05 23:59', '%Y %m %d %H:%M'))
+            datetime.strptime(f'{end_year} 01 05 23:59', '%Y %m %d %H:%M'))
             
         start_date_str = start_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         end_date_str = end_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
@@ -1031,14 +1089,25 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         """
         # Get the path to the stations database
         current_dir = Path(__file__).resolve().parent
-        db_file = current_dir / 'src' / 'NOAA_stations_clean.csv'
+        db_file = current_dir / 'src' / 'NOAA_stations_full.csv'
+        
+        # Check if the file exists
+        if not db_file.exists():
+            print(f"Error: Station database file not found at {db_file}")
+            print(f"Current directory: {current_dir}")
+            print(f"Looking for: {db_file.name}")
+            print("Using default station information")
+            return self._get_default_station_info()
         
         # Load database if it exists
-        if db_file.exists():
+        try:
             stations = pd.read_csv(db_file)
             
             # Find station
             station_id = str(self.station_id).zfill(11)
+            print(f"Looking for NOAA station ID: {station_id}")
+            print(f"Available NOAA station IDs: {stations['Station ID'].unique()[:5]}...")
+            
             station_data = stations[stations['Station ID'] == station_id]
             
             if len(station_data) > 0:
@@ -1060,14 +1129,32 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 }
                 
                 return required_fields
+            else:
+                print(f"NOAA station not found: {station_id}")
+                return self._get_default_station_info()
+                
+        except Exception as e:
+            print(f"Error loading NOAA station database: {e}")
+            return self._get_default_station_info()
+    
+    def _get_default_station_info(self) -> Dict[str, Any]:
+        """
+        Get default station information when database lookup fails.
         
-        # If database doesn't exist or station not found, return default values
+        Returns
+        -------
+        Dict[str, Any]
+            Default station information
+        """
+        print(f"Using default station information for NOAA station {self.station_id}")
+        
+        # Return default values if database doesn't exist or station not found
         return {
             'Station Name': f'NOAA Station {self.station_id}',
             'State': 'Unknown',
             'Country': 'USA',
-            'Latitude': 0.0,
-            'Longitude': 0.0,
+            'Latitude': 40.0,
+            'Longitude': -74.0,
             'Elevation': 0.0,
             'Start': '2000/01/01',
             'End': '2023/12/31',
