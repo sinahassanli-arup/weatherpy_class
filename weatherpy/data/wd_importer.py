@@ -784,11 +784,16 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             timeZone=timeZone
         )
         
-        # Switch UTC and Local time datetime index if needed
-        # This matches the behavior in the legacy _read_from_server function
-        if timeZone != data.index.name:
-            data = data.reset_index()
-            data = data.set_index(data.columns[1])
+        # Filter data to match the legacy behavior exactly
+        if timeZone == 'LocalTime':
+            # For LocalTime, filter to include only data from the requested years
+            # This matches the behavior in the legacy function
+            local_time_col = 'LocalTime'
+            if local_time_col in data.columns:
+                start_date_local = pd.Timestamp(f"{yearStart}-01-01", tz=self._timezone)
+                end_date_local = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=self._timezone)
+                data = data[(data[local_time_col] >= start_date_local) & 
+                           (data[local_time_col] <= end_date_local)]
         
         # Save to cache
         if self._save_raw:
