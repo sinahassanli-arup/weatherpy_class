@@ -6,25 +6,82 @@ import os
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import traceback
+import requests
+import tempfile
 
 # Uncomment the line below to import weatherpy locally
 sys.path.insert(0, r'C:\Users\Administrator\Documents\weatherpy_class')
 
 import weatherpy as wp
-from weatherpy.data.weather_data_base import WeatherData
-from weatherpy.data.weather_data_unifier import WeatherDataUnifier, BOMDataUnifier, NOAADataUnifier
-from weatherpy.data.weather_data_cleaner import BOMDataCleaner, NOAADataCleaner
-from weatherpy.data.weather_data_importer import BOMWeatherDataImporter, NOAAWeatherDataImporter
+from weatherpy.data.wd_base import WeatherData
+from weatherpy.data.wd_unifier import WeatherDataUnifier, BOMDataUnifier, NOAADataUnifier
+from weatherpy.data.wd_cleaner import BOMDataCleaner, NOAADataCleaner
+from weatherpy.data.wd_importer import BOMWeatherDataImporter, NOAAWeatherDataImporter
+
+# Add this line to check if the WeatherStationDatabase is working properly
+from weatherpy.data.wd_stations import WeatherStationDatabase
+
+# Import only the necessary functions from weatherpy_legacy
+from weatherpy_legacy.data._bom_preparation import _import_bomhistoric
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Add a test to check if the station database is working
+print("Testing WeatherStationDatabase...")
+try:
+    bom_db = WeatherStationDatabase('BOM')
+    print(f"BOM database loaded with {len(bom_db._data)} stations")
+    
+    # Test getting a station
+    test_station_id = '066037'
+    station_info = bom_db.get_station_info(test_station_id)
+    print(f"Station info for {test_station_id}: {station_info}")
+except Exception as e:
+    print(f"Error testing WeatherStationDatabase: {e}")
+    traceback.print_exc()
+
+def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval):
+    """Legacy BOM import method."""
+    print(f"Importing BOM data for station {stationID} from {yearStart} to {yearEnd}")
+    
+    try:
+        # Import data using the legacy function
+        data = _import_bomhistoric(
+            stationID=stationID,
+            interval=interval,
+            timeZone=timeZone,
+            yearStart=yearStart,
+            yearEnd=yearEnd
+        )
+        
+        print(f"Legacy import successful. Data shape: {data.shape}")
+        print(f"Data index type: {type(data.index)}")
+        print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
+        print(f"Data columns: {data.columns.tolist()}")
+        
+        return data, yearStart, yearEnd
+    except Exception as e:
+        print(f"Error in legacy import: {e}")
+        traceback.print_exc()
+        return None, yearStart, yearEnd
+
 def unify_data(data, data_type):
     """Legacy unification method."""
-    return wp.unify_datatype(data, data_type)
+    try:
+        from weatherpy_legacy.data.initialization import unify_data as legacy_unify
+        return legacy_unify(data, data_type)
+    except Exception as e:
+        print(f"Error in legacy unification: {e}")
+        traceback.print_exc()
+        return data
 
 def compare_dataframes(df1, df2):
     """Compare two DataFrames and print differences."""
+    if df1 is None or df2 is None:
+        print("Cannot compare DataFrames: one or both are None")
+        return
+        
     if df1.equals(df2):
         print("Data outputs are identical.")
         return
@@ -64,63 +121,72 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
 
     try:
         # Old method
-        data_old, yearStart_old, yearEnd_old = wp.import_data(
-            stationID,
-            dataType,
-            timeZone,
-            yearStart,
-            yearEnd,
-            interval
-        )
+        if dataType == 'BOM':
+            data_old, yearStart_old, yearEnd_old = legacy_import_bom(
+                stationID,
+                timeZone,
+                yearStart,
+                yearEnd,
+                interval
+            )
+        else:
+            print("Legacy NOAA import not implemented in this test script")
+            data_old, yearStart_old, yearEnd_old = None, yearStart, yearEnd
         
         # Class-based model
         if dataType == 'BOM':
             importer = BOMWeatherDataImporter(
-                stationID=stationID,
-                dataType=dataType,
-                timeZone=timeZone,
-                yearStart=yearStart,
-                yearEnd=yearEnd,
+                station_id=stationID,
+                data_type=dataType,
+                time_zone=timeZone,
+                year_start=yearStart,
+                year_end=yearEnd,
                 interval=interval
             )
         elif dataType == 'NOAA':
             importer = NOAAWeatherDataImporter(
-                stationID=stationID,
-                dataType=dataType,
-                timeZone=timeZone,
-                yearStart=yearStart,
-                yearEnd=yearEnd,
+                station_id=stationID,
+                data_type=dataType,
+                time_zone=timeZone,
+                year_start=yearStart,
+                year_end=yearEnd,
                 interval=interval
             )
         else:
             raise ValueError(f"Unsupported data type: {dataType}")
             
-        data_class, yearStart_class, yearEnd_class = importer.import_data()
+        weather_data = importer.import_data()
+        data_class = weather_data.data
+        yearStart_class = yearStart
+        yearEnd_class = yearEnd
         
         # Compare data
-        if data_old.equals(data_class):
-            print('Data outputs are identical.')
+        if data_old is not None and data_class is not None:
+            if data_old.equals(data_class):
+                print('Data outputs are identical.')
+            else:
+                print('Data outputs differ.')
+                # Compare column differences
+                old_cols = set(data_old.columns)
+                class_cols = set(data_class.columns)
+                print('\nColumn differences:')
+                print(f'Only in old: {old_cols - class_cols}')
+                print(f'Only in class: {class_cols - old_cols}')
+                print(f'Common columns: {old_cols & class_cols}')
+                
+                if verbose:
+                    # Compare a few sample values for common columns
+                    common_cols = old_cols & class_cols
+                    print('\nSample value comparison for common columns:')
+                    for col in common_cols:
+                        if not data_old[col].equals(data_class[col]):
+                            print(f'\nDifferences in {col}:')
+                            print('Old method first 5 values:')
+                            print(data_old[col].head())
+                            print('Class method first 5 values:')
+                            print(data_class[col].head())
         else:
-            print('Data outputs differ.')
-            # Compare column differences
-            old_cols = set(data_old.columns)
-            class_cols = set(data_class.columns)
-            print('\nColumn differences:')
-            print(f'Only in old: {old_cols - class_cols}')
-            print(f'Only in class: {class_cols - old_cols}')
-            print(f'Common columns: {old_cols & class_cols}')
-            
-            if verbose:
-                # Compare a few sample values for common columns
-                common_cols = old_cols & class_cols
-                print('\nSample value comparison for common columns:')
-                for col in common_cols:
-                    if not data_old[col].equals(data_class[col]):
-                        print(f'\nDifferences in {col}:')
-                        print('Old method first 5 values:')
-                        print(data_old[col].head())
-                        print('Class method first 5 values:')
-                        print(data_class[col].head())
+            print("Cannot compare data: one or both datasets are None")
         
         return data_old, data_class
                     
@@ -165,20 +231,26 @@ def compare_data_unify(data_class, data_type):
 
 def clean_data_legacy(data, data_type, clean_params):
     """Legacy cleaning method."""
-    return wp.clean_data(
-        data,
-        dataType=data_type,
-        clean_ranked_rows=clean_params.get('clean_ranked_rows', False),
-        clean_VC_filter=clean_params.get('clean_VC_filter', False),
-        clean_calms=clean_params.get('clean_calms', True),
-        clean_direction=clean_params.get('clean_direction', True),
-        clean_off_clock=clean_params.get('clean_off_clock', False),
-        clean_storms=clean_params.get('clean_storms', True),
-        clean_invalid=clean_params.get('clean_invalid', True),
-        clean_threshold=clean_params.get('clean_threshold', True),
-        col2valid=clean_params.get('col2valid', ['WindSpeed', 'WindDirection', 'WindType']),
-        thresholds=clean_params.get('thresholds', {'WindSpeed': (0, 50), 'PrePostRatio': (5, 30)})
-    )[0]  # Return only the cleaned data, ignore removed and calm data
+    try:
+        from weatherpy_legacy.data.cleaning import clean_data as legacy_clean
+        return legacy_clean(
+            data,
+            dataType=data_type,
+            clean_ranked_rows=clean_params.get('clean_ranked_rows', False),
+            clean_VC_filter=clean_params.get('clean_VC_filter', False),
+            clean_calms=clean_params.get('clean_calms', True),
+            clean_direction=clean_params.get('clean_direction', True),
+            clean_off_clock=clean_params.get('clean_off_clock', False),
+            clean_storms=clean_params.get('clean_storms', True),
+            clean_invalid=clean_params.get('clean_invalid', True),
+            clean_threshold=clean_params.get('clean_threshold', True),
+            col2valid=clean_params.get('col2valid', ['WindSpeed', 'WindDirection', 'WindType']),
+            thresholds=clean_params.get('thresholds', {'WindSpeed': (0, 50), 'PrePostRatio': (5, 30)})
+        )[0]  # Return only the cleaned data, ignore removed and calm data
+    except Exception as e:
+        print(f"Error in legacy cleaning: {e}")
+        traceback.print_exc()
+        return data
 
 def compare_data_clean(data_class, data_type, clean_params):
     """Compare legacy and OOP cleaning methods."""

@@ -68,11 +68,12 @@ class WeatherDataImporter(ABC):
             print(f"Warning: Could not get station information: {e}")
             self._station_info = {}
         
-        # Get timezone from station info if not provided
-        if time_zone is None:
-            self._timezone = self._station_info.get('Timezone Name', 'UTC')
+        # Get actual timezone from station info
+        if self._time_zone == 'LocalTime':
+            # Get the timezone from the station info
+            self._actual_timezone = self._station_info.get('Timezone Name', 'Australia/Sydney')
         else:
-            self._timezone = time_zone
+            self._actual_timezone = 'UTC'
         
         # Validate inputs
         self._validate_inputs()
@@ -322,33 +323,54 @@ class WeatherDataImporter(ABC):
         pd.DataFrame
             Data with standardized timezone columns and index
         """
-        if not hasattr(data.index, 'tz') or data.index.tz is None:
-            raise ValueError("DataFrame index must be timezone-aware")
+        try:
+            print(f"Standardizing timezone to {to_timezone}")
+            print(f"Input data index type: {type(data.index)}")
+            print(f"Input data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
             
-        df = data.copy()
-        
-        # Get station timezone
-        # For testing purposes, use 'Australia/Sydney' for BOM data
-        if self._data_type == 'BOM':
-            station_tz = 'Australia/Sydney'
-        else:
-            station_tz = 'America/New_York'  # Default for NOAA
-        
-        # Standardize timezone conversion
-        if to_timezone == 'UTC':
-            # Convert index to UTC
-            df.index = df.index.tz_convert('UTC')
-            df.index.name = 'UTC'
-            # Add LocalTime column
-            df['LocalTime'] = df.index.tz_convert(station_tz)
-        else:  # LocalTime
-            # Convert index to station timezone
-            df.index = df.index.tz_convert(station_tz)
-            df.index.name = 'LocalTime'
-            # Add UTC column
-            df['UTC'] = df.index.tz_convert('UTC')
+            if not hasattr(data.index, 'tz') or data.index.tz is None:
+                print("DataFrame index is not timezone-aware. Attempting to localize...")
+                # Try to localize the index to the station timezone
+                try:
+                    station_tz = self._actual_timezone
+                    print(f"Localizing index to {station_tz}")
+                    data.index = pd.DatetimeIndex(data.index).tz_localize(station_tz)
+                    print(f"Index localized successfully. New timezone: {data.index.tz}")
+                except Exception as e:
+                    print(f"Error localizing index: {e}")
+                    raise ValueError("DataFrame index must be timezone-aware")
             
-        return df
+            df = data.copy()
+            
+            # Get the actual timezone from the station info
+            station_tz = self._actual_timezone
+            print(f"Station timezone: {station_tz}")
+            
+            # Standardize timezone conversion
+            if to_timezone == 'UTC':
+                # Convert index to UTC
+                print("Converting index to UTC")
+                df.index = df.index.tz_convert('UTC')
+                df.index.name = 'UTC'
+                # Add LocalTime column
+                print(f"Adding LocalTime column with timezone {station_tz}")
+                df['LocalTime'] = df.index.tz_convert(station_tz)
+            else:  # LocalTime
+                # Convert index to station timezone
+                print(f"Converting index to station timezone {station_tz}")
+                df.index = df.index.tz_convert(station_tz)
+                df.index.name = 'LocalTime'
+                # Add UTC column
+                print("Adding UTC column")
+                df['UTC'] = df.index.tz_convert('UTC')
+            
+            print(f"Timezone standardization complete. Output index timezone: {df.index.tz}")
+            return df
+        except Exception as e:
+            print(f"Error standardizing timezone: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def _process_data(self, data: pd.DataFrame, yearStart: int, yearEnd: int, timeZone: str) -> pd.DataFrame:
         """
@@ -377,15 +399,7 @@ class WeatherDataImporter(ABC):
         date_col = data.index.name
         
         # Create date bounds in the appropriate timezone
-        if timeZone == 'UTC':
-            tz = 'UTC'
-        else:  # LocalTime
-            # For testing purposes, use 'Australia/Sydney' for BOM data
-            if self._data_type == 'BOM':
-                tz = 'Australia/Sydney'
-            else:
-                tz = 'America/New_York'  # Default for NOAA
-                
+        tz = pytz.UTC if timeZone == 'UTC' else self._actual_timezone
         start_date = pd.Timestamp(f"{yearStart}-01-01", tz=tz)
         end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=tz)
         
@@ -583,39 +597,70 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         # Import data from BOM
         print(f"Importing BOM data for station {self._station_id} from {yearStart} to {yearEnd}")
         
-        # Create a dummy DataFrame with the same structure as the expected output
-        # This is a temporary solution until we can properly implement the BOM data import
-        print("Creating dummy data for testing purposes")
-        
-        # Create a date range from start_date to end_date with interval minutes
-        # Make the date range timezone-aware with UTC timezone
-        date_range = pd.date_range(start=start_date, end=end_date, freq=f'{interval}min', tz='UTC')
-        
-        # Create a DataFrame with the date range as index
-        data = pd.DataFrame(index=date_range)
-        data.index.name = 'UTC'  # Set the index name to 'UTC'
-        
-        # Add dummy columns
-        data['Air Temperature'] = np.random.normal(20, 5, len(date_range))
-        data['Dew Point'] = np.random.normal(15, 3, len(date_range))
-        data['Relative Humidity'] = np.random.uniform(0, 100, len(date_range))
-        data['Wind Speed'] = np.random.exponential(5, len(date_range))
-        data['Wind Direction'] = np.random.uniform(0, 360, len(date_range))
-        data['Wind Gust'] = data['Wind Speed'] * np.random.uniform(1.2, 2.0, len(date_range))
-        data['Station Level Pressure'] = np.random.normal(1013, 5, len(date_range))
-        data['CloudOktass_col'] = np.random.randint(0, 9, len(date_range))
-        data['Visibility'] = np.random.exponential(10, len(date_range))
-        data['Precipitation'] = np.random.exponential(0.1, len(date_range))
-        data['Delta-T'] = np.random.normal(5, 2, len(date_range))
-        
-        # Process data
-        data = self._process_bom_data(data, timeZone)
-        
-        # Save to cache
-        if self._save_raw:
-            self._save_to_cache(data)
-        
-        return data
+        try:
+            # Direct implementation of BOM data import
+            # API URL
+            url = "https://rr0yh3ttf5.execute-api.ap-southeast-2.amazonaws.com/Prod/v1/bomhistoric"
+
+            # Preparing POST argument for request
+            stationFile = f"{self._station_id}.zip" if interval == 1 else f"{self._station_id}-{interval}minute.zip"
+
+            body = {
+                "bucket": f"bomhistoric-{interval}minute",
+                "stationID": stationFile
+            }
+            
+            import requests
+            import tempfile
+            
+            print(f"Making API request to {url} with body: {body}")
+            response_url = requests.post(url, json=body)
+            signed_url = response_url.json()['body']
+
+            signed_url_statusCode = response_url.json()['statusCode']
+            
+            if signed_url_statusCode != 200:
+                raise ValueError(f'signed_url: {signed_url} Error code: {signed_url_statusCode}')
+
+            print(f"Getting data from signed URL")
+            response_data = requests.get(signed_url)
+
+            if response_data.status_code == 200:
+                # Create a temporary file to save the response content
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    temp_file.write(response_data.content)
+                    temp_file_path = temp_file.name
+                    print(f"Reading data from temporary file: {temp_file_path}")
+                    data = pd.read_pickle(temp_file_path, compression='zip') 
+                    print("Data imported successfully")
+                os.remove(temp_file_path) 
+            else:
+                raise ValueError(f"API request failed with status code: {response_data.status_code}")
+            
+            # Switch UTC and Local time datetime index if needed 
+            if timeZone != data.index.name:
+                print(f"Switching index from {data.index.name} to {timeZone}")
+                data = data.reset_index()
+                data = data.set_index(data.columns[1])
+            
+            print(f"Data imported successfully. Shape: {data.shape}")
+            print(f"Data index type: {type(data.index)}")
+            print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
+            print(f"Data columns: {data.columns.tolist()}")
+            
+            # Process data
+            data = self._process_bom_data(data, timeZone)
+            
+            # Save to cache
+            if self._save_raw:
+                self._save_to_cache(data)
+            
+            return data
+        except Exception as e:
+            print(f"Error importing BOM data: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def _process_bom_data(self, data: pd.DataFrame, timeZone: str) -> pd.DataFrame:
         """
@@ -633,20 +678,44 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Processed data.
         """
-        df = data.copy()
-        
-        # Rename columns to standardized names
-        for bom_name, std_name in self._bom_names.items():
-            if bom_name in df.columns:
-                df.rename(columns={bom_name: std_name}, inplace=True)
-        
-        # Ensure all required columns exist
-        for col in self.UNIFIED_OBS_TYPES_NEWDATA:
-            if col not in df.columns and col not in ['obs_period_time_utc']:
-                df[col] = np.nan
-        
-        # Standardize timezone
-        return self._standardize_timezone(df, timeZone)
+        try:
+            print(f"Processing BOM data. Input shape: {data.shape}")
+            print(f"Input columns: {data.columns.tolist()}")
+            print(f"Input index type: {type(data.index)}")
+            print(f"Input index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
+            
+            df = data.copy()
+            
+            # Rename columns to standardized names
+            for bom_name, std_name in self._bom_names.items():
+                if bom_name in df.columns:
+                    print(f"Renaming column {bom_name} to {std_name}")
+                    df.rename(columns={bom_name: std_name}, inplace=True)
+            
+            # Ensure all required columns exist
+            for col in self.UNIFIED_OBS_TYPES_NEWDATA:
+                if col not in df.columns and col not in ['obs_period_time_utc']:
+                    print(f"Adding missing column {col}")
+                    df[col] = np.nan
+            
+            print(f"Processed data shape: {df.shape}")
+            print(f"Processed columns: {df.columns.tolist()}")
+            
+            # Standardize timezone
+            print(f"Standardizing timezone to {timeZone}")
+            result = self._standardize_timezone(df, timeZone)
+            
+            print(f"Final data shape: {result.shape}")
+            print(f"Final columns: {result.columns.tolist()}")
+            print(f"Final index type: {type(result.index)}")
+            print(f"Final index timezone: {result.index.tz if hasattr(result.index, 'tz') else 'None'}")
+            
+            return result
+        except Exception as e:
+            print(f"Error processing BOM data: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
 class NOAAWeatherDataImporter(WeatherDataImporter):
     """
