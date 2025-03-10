@@ -29,3 +29,19 @@ ENV/
 # Local development settings
 .env
 .env.local
+
+# Temporary files and directories
+weatherpy/data/tmp/
+weatherpy/data/tmp_*/
+tmp/
+*.zip
+*.csv.gz
+*.pkl
+
+# Example files that might be generated during testing
+examples/test_*.py
+examples/minimal_*.py
+examples/process_*.py
+examples/station_*.py
+examples/compare_*.py
+!examples/compare_data.py
