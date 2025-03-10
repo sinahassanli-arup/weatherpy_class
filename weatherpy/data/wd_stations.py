@@ -142,7 +142,7 @@ class WeatherStationDatabase:
             
         return WeatherStation(station_data.iloc[0])
     
-    def get_station_info(self, station_id: str) -> Dict[str, Any]:
+    def get_station_info(self, station_id: str, debug: bool = False) -> Dict[str, Any]:
         """
         Get station information in a dictionary format.
         
@@ -150,6 +150,8 @@ class WeatherStationDatabase:
         ----------
         station_id : str
             Station ID.
+        debug : bool, optional
+            Whether to print debug information. Default is False.
         
         Returns
         -------
@@ -163,17 +165,18 @@ class WeatherStationDatabase:
         """
         try:
             # Print available station IDs for debugging
-            print(f"Looking for station ID: {station_id}")
-            if not self._data.empty:
-                if self.data_type == 'BOM':
-                    id_column = 'Station Code'
-                elif self.data_type == 'NOAA':
-                    id_column = 'Station ID'
-                else:
-                    id_column = None
-                
-                if id_column and id_column in self._data.columns:
-                    print(f"Available station IDs: {self._data[id_column].unique()[:5]}...")
+            if debug:
+                print(f"Looking for station ID: {station_id}")
+                if not self._data.empty:
+                    if self.data_type == 'BOM':
+                        id_column = 'Station Code'
+                    elif self.data_type == 'NOAA':
+                        id_column = 'Station ID'
+                    else:
+                        id_column = None
+                    
+                    if id_column and id_column in self._data.columns:
+                        print(f"Available station IDs: {self._data[id_column].unique()[:5]}...")
             
             # Get station
             station = self.get_station(station_id)

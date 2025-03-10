@@ -63,7 +63,7 @@ class WeatherDataImporter(ABC):
         
         # Get station information
         try:
-            self._station_info = self._station_db.get_station_info(self._station_id)
+            self._station_info = self._station_db.get_station_info(self._station_id, debug=True)
         except Exception as e:
             print(f"Warning: Could not get station information: {e}")
             self._station_info = {}
@@ -146,7 +146,7 @@ class WeatherDataImporter(ABC):
         """
         # Get station information
         try:
-            station_info = self._station_db.get_station_info(self._station_id)
+            station_info = self._station_db.get_station_info(self._station_id, debug=False)
         except Exception as e:
             print(f"Warning: Could not get station information: {e}")
             station_info = {}
@@ -267,7 +267,7 @@ class WeatherDataImporter(ABC):
         """
         # Get station information
         try:
-            station_info = self._station_db.get_station_info(self._station_id)
+            station_info = self._station_db.get_station_info(self._station_id, debug=False)
         except Exception as e:
             print(f"Warning: Could not get station information: {e}")
             station_info = {}
