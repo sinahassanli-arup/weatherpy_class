@@ -10,6 +10,7 @@ import requests
 import tempfile
 import pytz
 from datetime import datetime
+import argparse
 
 # Uncomment the line below to import weatherpy locally
 sys.path.insert(0, r'C:\Users\Administrator\Documents\weatherpy_class')
@@ -40,9 +41,10 @@ except Exception as e:
     print(f"Error testing WeatherStationDatabase: {e}")
     traceback.print_exc()
 
-def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval):
+def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval, verbose=True):
     """Legacy BOM import method."""
-    print(f"Importing BOM data for station {stationID} from {yearStart} to {yearEnd}")
+    if verbose:
+        print(f"Importing BOM data for station {stationID} from {yearStart} to {yearEnd}")
     
     try:
         # Direct implementation of BOM data import
@@ -57,7 +59,8 @@ def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval):
             "stationID": stationFile
         }
         
-        print(f"Making API request to {url} with body: {body}")
+        if verbose:
+            print(f"Making API request to {url} with body: {body}")
         response_url = requests.post(url, json=body)
         signed_url = response_url.json()['body']
 
@@ -66,7 +69,8 @@ def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval):
         if signed_url_statusCode != 200:
             raise ValueError(f'signed_url: {signed_url} Error code: {signed_url_statusCode}')
 
-        print(f"Getting data from signed URL")
+        if verbose:
+            print(f"Getting data from signed URL")
         response_data = requests.get(signed_url)
 
         if response_data.status_code == 200:
@@ -74,23 +78,27 @@ def legacy_import_bom(stationID, timeZone, yearStart, yearEnd, interval):
             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
                 temp_file.write(response_data.content)
                 temp_file_path = temp_file.name
-                print(f"Reading data from temporary file: {temp_file_path}")
+                if verbose:
+                    print(f"Reading data from temporary file: {temp_file_path}")
                 data = pd.read_pickle(temp_file_path, compression='zip') 
-                print("Data imported successfully")
+                if verbose:
+                    print("Data imported successfully")
             os.remove(temp_file_path) 
         else:
             raise ValueError(f"API request failed with status code: {response_data.status_code}")
         
         # Switch UTC and Local time datetime index if needed 
         if timeZone != data.index.name:
-            print(f"Switching index from {data.index.name} to {timeZone}")
+            if verbose:
+                print(f"Switching index from {data.index.name} to {timeZone}")
             data = data.reset_index()
             data = data.set_index(data.columns[1])
         
-        print(f"Legacy import successful. Data shape: {data.shape}")
-        print(f"Data index type: {type(data.index)}")
-        print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
-        print(f"Data columns: {data.columns.tolist()}")
+        if verbose:
+            print(f"Legacy import successful. Data shape: {data.shape}")
+            print(f"Data index type: {type(data.index)}")
+            print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
+            print(f"Data columns: {data.columns.tolist()}")
         
         return data, yearStart, yearEnd
     except Exception as e:
@@ -127,63 +135,73 @@ def unify_data(data, data_type):
         return data
 
 def compare_dataframes(df1, df2):
-    """Compare two DataFrames and print differences."""
+    """Compare two DataFrames and print differences in a concise way."""
     if df1 is None or df2 is None:
         print("Cannot compare DataFrames: one or both are None")
         return
         
     if df1.equals(df2):
-        print("Data outputs are identical.")
+        print("✓ Data outputs are identical.")
         return
     
-    print("Data outputs differ.")
+    print("✗ Data outputs differ.")
+    
     # Compare column differences
     cols1 = set(df1.columns)
     cols2 = set(df2.columns)
-    print("\nColumn differences:")
-    print(f"Only in first DataFrame: {cols1 - cols2}")
-    print(f"Only in second DataFrame: {cols2 - cols1}")
-    print(f"Common columns: {cols1 & cols2}")
+    col_diff1 = cols1 - cols2
+    col_diff2 = cols2 - cols1
+    
+    if col_diff1 or col_diff2:
+        print("  Column differences:")
+        if col_diff1:
+            print(f"  - Only in first DataFrame: {', '.join(sorted(col_diff1))}")
+        if col_diff2:
+            print(f"  - Only in second DataFrame: {', '.join(sorted(col_diff2))}")
     
     # Compare shapes
-    print("\nShape comparison:")
-    print(f"First DataFrame shape: {df1.shape}")
-    print(f"Second DataFrame shape: {df2.shape}")
+    if df1.shape != df2.shape:
+        print(f"  Shape difference: {df1.shape} vs {df2.shape}")
     
     # For common columns, compare values
     common_cols = cols1 & cols2
     if common_cols:
-        print("\nDetailed value comparison:")
+        diff_cols = []
         for col in common_cols:
             if not df1[col].equals(df2[col]):
-                print(f"\nDifferences in {col}:")
-                print("First DataFrame sample values:")
-                print(df1[col].head())
-                print("Second DataFrame sample values:")
-                print(df2[col].head())
+                diff_cols.append(col)
+        
+        if diff_cols:
+            print(f"  Value differences in {len(diff_cols)} columns: {', '.join(sorted(diff_cols))}")
 
 def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, interval, verbose=True):
     """
     Compare data import between legacy and class-based methods.
     """
     if verbose:
-        print('Starting data import comparison...')
+        print(f'Comparing {dataType} import for station {stationID} ({timeZone})...')
 
     try:
         # Old method
         if dataType == 'BOM':
+            if not verbose:
+                print(f'Importing legacy BOM data...')
             data_old, yearStart_old, yearEnd_old = legacy_import_bom(
                 stationID,
                 timeZone,
                 yearStart,
                 yearEnd,
-                interval
+                interval,
+                verbose
             )
         else:
             print("Legacy NOAA import not implemented in this test script")
             data_old, yearStart_old, yearEnd_old = None, yearStart, yearEnd
         
         # Class-based model
+        if not verbose:
+            print(f'Importing OOP {dataType} data...')
+            
         if dataType == 'BOM':
             importer = BOMWeatherDataImporter(
                 station_id=stationID,
@@ -212,29 +230,8 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
         
         # Compare data
         if data_old is not None and data_class is not None:
-            if data_old.equals(data_class):
-                print('Data outputs are identical.')
-            else:
-                print('Data outputs differ.')
-                # Compare column differences
-                old_cols = set(data_old.columns)
-                class_cols = set(data_class.columns)
-                print('\nColumn differences:')
-                print(f'Only in old: {old_cols - class_cols}')
-                print(f'Only in class: {class_cols - old_cols}')
-                print(f'Common columns: {old_cols & class_cols}')
-                
-                if verbose:
-                    # Compare a few sample values for common columns
-                    common_cols = old_cols & class_cols
-                    print('\nSample value comparison for common columns:')
-                    for col in common_cols:
-                        if not data_old[col].equals(data_class[col]):
-                            print(f'\nDifferences in {col}:')
-                            print('Old method first 5 values:')
-                            print(data_old[col].head())
-                            print('Class method first 5 values:')
-                            print(data_class[col].head())
+            print(f'\nComparing {dataType} import results:')
+            compare_dataframes(data_old, data_class)
         else:
             print("Cannot compare data: one or both datasets are None")
         
@@ -247,6 +244,7 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
 
 def compare_data_unify(data_class, data_type):
     """Compare legacy and OOP unification methods."""
+    print(f"\nComparing {data_type} unification methods...")
     
     # Run legacy unification method
     legacy_unified = unify_data(data_class, data_type)
@@ -311,19 +309,16 @@ def clean_data_legacy(data, data_type, clean_params):
 
 def compare_data_clean(data_class, data_type, clean_params):
     """Compare legacy and OOP cleaning methods."""
-    print(f"\nStarting data cleaning comparison...\n")
+    print(f"\nComparing {data_type} cleaning methods...")
 
     # Unify data before cleaning
-    print("Unifying data before cleaning...")
+    print("  Unifying data before cleaning...")
     unified_data = unify_data(data_class, data_type)
-    print("Data Unified\n")
 
     # Run legacy cleaning method
-    print("Running legacy cleaning method...")
+    print("  Running legacy cleaning method...")
     legacy_cleaned = clean_data_legacy(unified_data, data_type, clean_params)
-    print("Legacy cleaning completed.")
-    print(f"Legacy cleaned data shape: {legacy_cleaned.shape}")
-    print(f"Legacy cleaned columns: {legacy_cleaned.columns.tolist()}\n")
+    print(f"  Legacy cleaning completed. Shape: {legacy_cleaned.shape}")
 
     try:
         # Create WeatherData instance with required parameters
@@ -343,14 +338,13 @@ def compare_data_clean(data_class, data_type, clean_params):
 
         # Clean the data and get the DataFrame
         # Pass remove_calms parameter to match legacy behavior
+        print("  Running OOP cleaning method...")
         cleaned_weather_data = cleaner.clean(remove_calms=clean_params.get('clean_calms', True))
         cleaned_data = cleaned_weather_data.data
-        print("OOP cleaning completed.")
-        print(f"OOP cleaned data shape: {cleaned_data.shape}")
-        print(f"OOP cleaned columns: {cleaned_data.columns.tolist()}\n")
+        print(f"  OOP cleaning completed. Shape: {cleaned_data.shape}")
 
         # Compare results
-        print("Comparing cleaning results:")
+        print("\nComparing cleaning results:")
         compare_dataframes(legacy_cleaned, cleaned_data)
 
     except Exception as e:
@@ -397,14 +391,12 @@ def correct_data_legacy(data, data_type, correction_params):
 
 def compare_data_correct(data_class, data_type, correction_params):
     """Compare legacy and OOP correction methods."""
-    print(f"\nStarting data correction comparison...\n")
+    print(f"\nComparing {data_type} correction methods...")
 
     # Run legacy correction method
-    print("Running legacy correction method...")
+    print("  Running legacy correction method...")
     legacy_corrected = correct_data_legacy(data_class, data_type, correction_params)
-    print("Legacy correction completed.")
-    print(f"Legacy corrected data shape: {legacy_corrected.shape}")
-    print(f"Legacy corrected columns: {legacy_corrected.columns.tolist()}\n")
+    print(f"  Legacy correction completed. Shape: {legacy_corrected.shape}")
 
     try:
         # Create WeatherData instance with required parameters
@@ -423,14 +415,13 @@ def compare_data_correct(data_class, data_type, correction_params):
             corrector = NOAADataCorrector(weather_data, correction_params)
 
         # Apply corrections
+        print("  Running OOP correction method...")
         corrected_weather_data = corrector.correct()
         corrected_data = corrected_weather_data.data
-        print("OOP correction completed.")
-        print(f"OOP corrected data shape: {corrected_data.shape}")
-        print(f"OOP corrected columns: {corrected_data.columns.tolist()}\n")
+        print(f"  OOP correction completed. Shape: {corrected_data.shape}")
 
         # Compare results
-        print("Comparing correction results:")
+        print("\nComparing correction results:")
         compare_dataframes(legacy_corrected, corrected_data)
 
     except Exception as e:
@@ -487,61 +478,72 @@ clean_params_noaa = {
     'zero_calm_direction': False
 }
 
-# Set verbose to True for detailed output
-input_data_1['verbose'] = True
-input_data_2['verbose'] = True
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Compare legacy and OOP-based WeatherPy implementations')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
+    parser.add_argument('--noaa', action='store_true', help='Run NOAA comparison')
+    parser.add_argument('--unify', action='store_true', help='Run unification comparison')
+    parser.add_argument('--clean', action='store_true', help='Run cleaning comparison')
+    parser.add_argument('--correct', action='store_true', help='Run correction comparison')
+    args = parser.parse_args()
 
-print('\nRunning detailed comparison with fixed parameters:')
-print('BOM Parameters:', clean_params_bom)
-print('NOAA Parameters:', clean_params_noaa)
-print('\n********************************************\n')
+    # Set verbosity based on command line argument
+    input_data_1['verbose'] = args.verbose
+    input_data_2['verbose'] = args.verbose
 
-print('\nRunning Importer for BOM comparison...')
-data_old_bom, data_class_bom = compare_data_import(**input_data_1)
+    print('\n=== WeatherPy Comparison Tool ===')
+    print('BOM Parameters:', clean_params_bom if args.verbose else '...')
+    print('NOAA Parameters:', clean_params_noaa if args.verbose else '...')
+    print('=' * 30)
 
-# print('\nRunning Importer for NOAA comparison...')
-# data_old_noaa, data_class_noaa = compare_data_import(**input_data_2)
+    # Always run BOM import comparison
+    print('\n[1/4] Running BOM import comparison...')
+    data_old_bom, data_class_bom = compare_data_import(**input_data_1)
 
-# print('\n\n********************************************\n\n')
+    # Run NOAA import comparison if requested
+    if args.noaa:
+        print('\n[2/4] Running NOAA import comparison...')
+        data_old_noaa, data_class_noaa = compare_data_import(**input_data_2)
+    else:
+        data_old_noaa, data_class_noaa = None, None
 
-# print('\nRunning Unifier for BOM comparison...')
-# # if data_old_bom is not None and data_class_bom is not None:
-# #     compare_data_unify(data_class_bom, 'BOM')
+    # Run unification comparison if requested
+    if args.unify and data_class_bom is not None:
+        print('\n[3/4] Running unification comparison...')
+        compare_data_unify(data_class_bom, 'BOM')
+        
+        if args.noaa and data_class_noaa is not None:
+            compare_data_unify(data_class_noaa, 'NOAA')
 
-# print('\nRunning Unifier for NOAA comparison...')
-# if data_old_noaa is not None and data_class_noaa is not None:
-#     compare_data_unify(data_class_noaa, 'NOAA')
+    # Run cleaning comparison if requested
+    if args.clean and data_class_bom is not None:
+        print('\n[4/4] Running cleaning comparison...')
+        compare_data_clean(data_class_bom, 'BOM', clean_params_bom)
+        
+        if args.noaa and data_class_noaa is not None:
+            compare_data_clean(data_class_noaa, 'NOAA', clean_params_noaa)
 
-# print('\n\n********************************************\n\n')
+    # Run correction comparison if requested
+    if args.correct and data_class_bom is not None:
+        # Define correction parameters
+        correction_params_bom = {
+            'correct_terrain': True,
+            'terrain_source': 'database',
+            'station_id': '066037',
+            'correct_bom_offset': False,
+            'correct_10min_to_1h': True,
+            'conversion_factor': 1.05
+        }
+        
+        print('\n[Extra] Running correction comparison...')
+        compare_data_correct(data_class_bom, 'BOM', correction_params_bom)
+        
+        if args.noaa and data_class_noaa is not None:
+            correction_params_noaa = {
+                'correct_terrain': False,
+                'station_id': '72509014739'
+            }
+            compare_data_correct(data_class_noaa, 'NOAA', correction_params_noaa)
 
-# print('\nRunning Cleaner for BOM comparison...')
-# # if data_old_bom is not None and data_class_bom is not None:
-# #     compare_data_clean(data_class_bom, 'BOM', clean_params_bom)
-
-# print('\nRunning Cleaner for NOAA comparison...')
-# if data_old_noaa is not None and data_class_noaa is not None:
-#     compare_data_clean(data_class_noaa, 'NOAA', clean_params_noaa)
-
-# # Example usage
-# correction_params_bom = {
-#     'correct_terrain': True,
-#     'terrain_source': 'database',
-#     'station_id': '066037',
-#     'correct_bom_offset': False,  # Not testing BOM offset
-#     'correct_10min_to_1h': True,
-#     'conversion_factor': 1.05
-# }
-
-# print('\n\n********************************************\n\n')
-
-# print('\nRunning Corrector for BOM comparison...')
-# if data_old_bom is not None and data_class_bom is not None:
-#     print("\nTesting BOM corrections with:")
-#     print("- Terrain correction (from database)")
-#     print("- 10min to 1h conversion (factor: 1.05)")
-#     compare_data_correct(data_class_bom, 'BOM', correction_params_bom)
-
-# Remove NOAA comparison
-# print('\nRunning Corrector for NOAA comparison...')
-# if data_old_noaa is not None and data_class_noaa is not None:
-#     compare_data_correct(data_class_noaa, 'NOAA', correction_params_noaa) 
+    print('\n=== Comparison Complete ===') 
