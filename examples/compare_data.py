@@ -63,28 +63,92 @@ def compare_dataframes(df1, df2):
 
 def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, interval, verbose=False):
     """
-    Compare data import between legacy and class-based methods.
+    Compare data import between legacy and OOP versions.
+    
+    Parameters
+    ----------
+    stationID : str
+        Station ID.
+    dataType : str
+        Data type (BOM or NOAA).
+    timeZone : str
+        Time zone (UTC or LocalTime).
+    yearStart : int
+        Start year.
+    yearEnd : int
+        End year.
+    interval : str
+        Data interval (60minute or daily).
+    verbose : bool, optional
+        Whether to print verbose output. Default is False.
+    
+    Returns
+    -------
+    tuple
+        (legacy_data, oop_data)
     """
-    print(f'Comparing {dataType} import for station {stationID} ({timeZone})...')
-
+    print(f"Comparing {dataType} import for station {stationID} ({timeZone})...")
+    
+    # Import legacy data
+    print("Importing legacy data...")
     try:
-        # Legacy method using weatherpy_legacy.import_data directly
-        print(f'Importing legacy {dataType} data...')
-        data_old, yearStart_old, yearEnd_old = wpl.import_data(
-            stationID,
-            dataType,
-            timeZone,
-            yearStart,
-            yearEnd,
-            interval,
-            save_raw=False
-        )
-        
-        # Class-based model
-        print(f'Importing OOP {dataType} data...')
-        try:
+        # Get station info
+        if dataType == 'BOM':
+            import weatherpy_legacy.data.stations as stations
+            station_info = stations.station_info(stationID, printed=True)
+            
+            # Import data
+            print("\n-----------------------------------------------------\n")
+            # Use the main import_data function from weatherpy_legacy
+            data_old, _, _ = wpl.import_data(
+                stationID,
+                dataType,
+                timeZone,
+                yearStart,
+                yearEnd,
+                interval,
+                save_raw=False
+            )
+        elif dataType == 'NOAA':
+            import weatherpy_legacy.data.stations as stations
+            station_info = stations.station_info(stationID, printed=True)
+            
+            # Import data
+            print("\n-----------------------------------------------------\n")
+            # Use the main import_data function from weatherpy_legacy
+            data_old, _, _ = wpl.import_data(
+                stationID,
+                dataType,
+                timeZone,
+                yearStart,
+                yearEnd,
+                interval,
+                save_raw=False
+            )
+        else:
+            print(f"Error: Unsupported data type: {dataType}")
+            return None, None
+    except Exception as e:
+        print(f"Error importing legacy data: {e}")
+        import traceback
+        traceback.print_exc()
+        data_old = None
+    
+    # Import OOP data
+    print("\nImporting OOP data...")
+    try:
+        # Get station info
+        if dataType == 'BOM':
+            from weatherpy.data.wd_stations import WeatherStationDatabase
+            try:
+                station_db = WeatherStationDatabase('BOM')
+                station_info = station_db.get_station_info(stationID)
+            except Exception as e:
+                print(f"Warning: Could not get station information: {e}")
+            
+            # Import data using the class-based approach
             if dataType == 'BOM':
-                importer = BOMWeatherDataImporter(
+                importer = wp.BOMWeatherDataImporter(
                     station_id=stationID,
                     data_type=dataType,
                     time_zone=timeZone,
@@ -92,8 +156,8 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
                     year_end=yearEnd,
                     interval=interval
                 )
-            elif dataType == 'NOAA':
-                importer = NOAAWeatherDataImporter(
+            else:  # NOAA
+                importer = wp.NOAAWeatherDataImporter(
                     station_id=stationID,
                     data_type=dataType,
                     time_zone=timeZone,
@@ -101,42 +165,114 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
                     year_end=yearEnd,
                     interval=interval
                 )
-            else:
-                raise ValueError(f"Unsupported data type: {dataType}")
                 
             weather_data = importer.import_data()
             data_class = weather_data.data
-        except ValueError as ve:
-            print(f"Error in OOP import: {ve}")
-            print("This is expected if the station ID is not found in the database.")
-            print("To fix this, use a valid station ID or modify the station database.")
-            return data_old, None
-        
-        # Compare data
-        if data_old is not None and data_class is not None:
-            print(f'\nComparing {dataType} import results:')
-            compare_dataframes(data_old, data_class)
             
-            if verbose:
-                print("\nSample data from legacy import:")
-                print(data_old.head())
-                print("\nSample data from OOP import:")
-                print(data_class.head())
+        elif dataType == 'NOAA':
+            from weatherpy.data.wd_stations import WeatherStationDatabase
+            try:
+                station_db = WeatherStationDatabase('NOAA')
+                station_info = station_db.get_station_info(stationID)
+            except Exception as e:
+                print(f"Warning: Could not get station information: {e}")
+            
+            # Import data using the class-based approach
+            if dataType == 'BOM':
+                importer = wp.BOMWeatherDataImporter(
+                    station_id=stationID,
+                    data_type=dataType,
+                    time_zone=timeZone,
+                    year_start=yearStart,
+                    year_end=yearEnd,
+                    interval=interval
+                )
+            else:  # NOAA
+                importer = wp.NOAAWeatherDataImporter(
+                    station_id=stationID,
+                    data_type=dataType,
+                    time_zone=timeZone,
+                    year_start=yearStart,
+                    year_end=yearEnd,
+                    interval=interval
+                )
+                
+            weather_data = importer.import_data()
+            data_class = weather_data.data
         else:
-            print("Cannot compare data: one or both datasets are None")
-        
-        return data_old, data_class
-                    
+            print(f"Error: Unsupported data type: {dataType}")
+            return None, None
     except Exception as e:
-        logging.error('An error occurred during import comparison: %s', str(e))
+        print(f"Error importing OOP data: {e}")
+        import traceback
         traceback.print_exc()
-        return None, None
+        data_class = None
+    
+    # Compare results
+    if data_old is not None and data_class is not None:
+        print("\nComparing import results:")
+        compare_dataframes(data_old, data_class)
+    
+    return data_old, data_class
+
+def list_available_stations(data_type=None):
+    """List available station IDs from the station database."""
+    try:
+        # Create a station database instance
+        from weatherpy.data.wd_stations import WeatherStationDatabase
+        
+        # Get all stations or filter by data type
+        if data_type:
+            station_db = WeatherStationDatabase(data_type)
+            stations = station_db.get_all_stations()
+        else:
+            # Get BOM stations by default
+            station_db = WeatherStationDatabase('BOM')
+            stations = station_db.get_all_stations()
+        
+        if stations:
+            station_ids = [station.id for station in stations]
+            print(f"\nAvailable station IDs ({len(station_ids)} total):")
+            # Print first 10 stations and indicate if there are more
+            print(', '.join(station_ids[:10]) + 
+                  (f"... and {len(station_ids)-10} more" if len(station_ids) > 10 else ""))
+        else:
+            print("No stations found in the database.")
+            
+        return station_ids
+    except Exception as e:
+        print(f"Error listing stations: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+def print_data_paths():
+    """Print the paths where the legacy and OOP versions look for data."""
+    print("\n=== Data File Locations ===")
+    
+    # For legacy weatherpy
+    try:
+        import weatherpy_legacy as wpl
+        legacy_path = wpl.get_data_directory() if hasattr(wpl, 'get_data_directory') else "Unknown"
+        print(f"Legacy WeatherPy data directory: {legacy_path}")
+    except Exception as e:
+        print(f"Could not determine legacy data path: {str(e)}")
+    
+    # For OOP weatherpy
+    try:
+        import weatherpy as wp
+        oop_path = wp.get_data_directory() if hasattr(wp, 'get_data_directory') else "Unknown"
+        print(f"OOP WeatherPy data directory: {oop_path}")
+    except Exception as e:
+        print(f"Could not determine OOP data path: {str(e)}")
+    
+    print("=" * 30)
 
 # Example usage
 input_data_1 = {
-    'stationID': '001006',  # Using a valid station ID from the database (WYNDHAM AERO)
+    'stationID': '066037',  # Using a valid station ID from the database (WYNDHAM AERO)
     'dataType': 'BOM',
-    'timeZone': 'UTC',
+    'timeZone': 'LocalTime',
     'yearStart': 2010,
     'yearEnd': 2020,
     'interval': 60,
@@ -156,6 +292,13 @@ input_data_2 = {
 # Run the comparison
 print('\n=== WeatherPy Import Comparison ===')
 print('=' * 30)
+
+# List available stations
+print("\nListing available BOM stations:")
+bom_stations = list_available_stations('BOM')
+
+# Print data file paths
+print_data_paths()
 
 # Run BOM import comparison
 print('\nRunning BOM import comparison...')
