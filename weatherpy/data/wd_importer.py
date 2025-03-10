@@ -31,7 +31,7 @@ class WeatherDataImporter(ABC):
     
     def __init__(self, 
                  station_id: str,
-                 data_type: str = 'BOM',
+                 data_type: str = None,
                  time_zone: Optional[str] = None,
                  year_start: Optional[int] = None,
                  year_end: Optional[int] = None,
@@ -58,29 +58,19 @@ class WeatherDataImporter(ABC):
             
         self._save_raw = save_raw
         
-        # Initialize station database
-        self._station_db = WeatherStationDatabase(data_type)
-        
-        # Get station information
+        # Initialize station
         try:
-            self._station_info = self._station_db.get_station_info(self._station_id)
+            station_db = WeatherStationDatabase(data_type)
+            self.station = station_db.get_station(self._station_id)
         except Exception as e:
             print(f"Warning: Could not get station information: {e}")
-            self._station_info = {}
-        
-        # Get actual timezone from station info
-        if self._time_zone == 'LocalTime':
-            # Get the timezone from the station info
-            self._actual_timezone = self._station_info.get('Timezone Name', 'Australia/Sydney')
-        else:
-            self._actual_timezone = 'UTC'
+            self.station = None
         
         # Validate inputs
         self._validate_inputs()
         
         # Validate years
-        if self._year_start is not None and self._year_end is not None:
-            self._year_start, self._year_end = self._validate_station_years()
+        self._year_start, self._year_end = self.validate_years()
         
     @property
     def station_id(self) -> str:
@@ -131,11 +121,13 @@ class WeatherDataImporter(ABC):
         if self._time_zone not in ['LocalTime', 'UTC']:
             raise ValueError("Time zone must be 'LocalTime' or 'UTC'")
         
-        # Validate interval
-        if self._interval not in [1, 10, 30, 60]:
-            raise ValueError("Interval must be 1, 10, 30, or 60 minutes")
+        # Validate interval based on data type
+        if self._data_type == 'BOM' and self._interval not in [1, 10, 60]:
+            raise ValueError("For BOM data, interval must be 1, 10, or 60 minutes")
+        elif self._data_type == 'NOAA' and self._interval != 30:
+            raise ValueError("For NOAA data, interval must be 30 minutes")
     
-    def _validate_station_years(self) -> Tuple[int, int]:
+    def validate_years(self) -> Tuple[int, int]:
         """
         Validate station years.
         
@@ -144,54 +136,38 @@ class WeatherDataImporter(ABC):
         Tuple[int, int]
             Start and end years.
         """
-        # Get station information
-        try:
-            station_info = self._station_db.get_station_info(self._station_id)
-        except Exception as e:
-            print(f"Warning: Could not get station information: {e}")
-            station_info = {}
-        
-        # Get station start and end years
-        station_start_year = station_info.get('Start Year', 1900)
-        station_end_year = station_info.get('End Year', datetime.now().year)
-        
-        # Convert to integers if they are strings
-        if isinstance(station_start_year, str):
-            station_start_year = int(station_start_year)
-        if isinstance(station_end_year, str):
-            station_end_year = int(station_end_year)
-        
-        # Use user-provided years if they are within the station's range
-        start_year = self._year_start if self._year_start is not None else station_start_year
-        end_year = self._year_end if self._year_end is not None else station_end_year
-        
         # Validate years
-        if start_year < station_start_year:
-            print(f"Warning: Start year {start_year} is before station start year {station_start_year}. Using station start year.")
-            start_year = station_start_year
+        if self._year_start is not None and self._year_end is not None:
+            if self._year_start > self._year_end:
+                raise ValueError("yearStart must be less than or equal to yearEnd")
         
-        if end_year > station_end_year:
-            print(f"Warning: End year {end_year} is after station end year {station_end_year}. Using station end year.")
-            end_year = station_end_year
+        # Get station start and end years if station is available
+        if self.station is not None:
+            station_start_year = getattr(self.station, 'start_year', 1900)
+            station_end_year = getattr(self.station, 'end_year', datetime.now().year)
+            
+            # Convert to integers if they are strings
+            station_start_year = int(station_start_year)
+            station_end_year = int(station_end_year)
+            
+            # Use user-provided years if they are within the station's range
+            start_year = self._year_start if self._year_start is not None else station_start_year
+            end_year = self._year_end if self._year_end is not None else station_end_year
+            
+            # Validate years
+            if start_year < station_start_year:
+                print(f"Warning: Start year {start_year} is before station start year {station_start_year}. Using station start year.")
+                start_year = station_start_year
+            
+            if end_year > station_end_year:
+                print(f"Warning: End year {end_year} is after station end year {station_end_year}. Using station end year.")
+                end_year = station_end_year
+        else:
+            # If no station info, use provided years or defaults
+            start_year = self._year_start if self._year_start is not None else 1900
+            end_year = self._year_end if self._year_end is not None else datetime.now().year
         
         return start_year, end_year
-    
-    @staticmethod
-    def _get_temp_folder() -> str:
-        """
-        Get temporary folder path.
-        
-        Returns
-        -------
-        str
-            Path to temporary folder.
-        """
-        # Create temporary folder if it doesn't exist
-        temp_folder = os.path.join(os.path.expanduser('~'), '.weatherpy', 'temp')
-        if not os.path.exists(temp_folder):
-            os.makedirs(temp_folder)
-        
-        return temp_folder
     
     def _get_cache_path(self) -> Tuple[str, str]:
         """
@@ -202,8 +178,13 @@ class WeatherDataImporter(ABC):
         Tuple[str, str]
             Cache directory and file path.
         """
+        # Create temporary folder if it doesn't exist
+        temp_folder = os.path.join(os.path.expanduser('~'), '.weatherpy', 'temp')
+        if not os.path.exists(temp_folder):
+            os.makedirs(temp_folder)
+        
         # Create cache folder if it doesn't exist
-        cache_dir = os.path.join(self._get_temp_folder(), 'cache', self._data_type)
+        cache_dir = os.path.join(temp_folder, self._data_type)
         
         # Create cache filename
         cache_file = f"{self._station_id}_{self._year_start}_{self._year_end}_{self._interval}_{self._time_zone}.pkl"
@@ -255,170 +236,6 @@ class WeatherDataImporter(ABC):
             print(f"Saved data to cache: {cache_file}")
         except Exception as e:
             print(f"Error saving cache file: {e}")
-    
-    def _get_date_bounds(self) -> Tuple[datetime, datetime]:
-        """
-        Get date bounds for data import.
-        
-        Returns
-        -------
-        Tuple[datetime, datetime]
-            Start and end datetime bounds.
-        """
-        # Get station information
-        try:
-            station_info = self._station_db.get_station_info(self._station_id)
-        except Exception as e:
-            print(f"Warning: Could not get station information: {e}")
-            station_info = {}
-        
-        # Get station start and end years
-        station_start_year = station_info.get('Start Year', 1900)
-        station_end_year = station_info.get('End Year', datetime.now().year)
-        
-        # Convert to integers if they are strings
-        if isinstance(station_start_year, str):
-            station_start_year = int(station_start_year)
-        if isinstance(station_end_year, str):
-            station_end_year = int(station_end_year)
-        
-        # Use user-provided years if they are within the station's range
-        start_year = self._year_start if self._year_start is not None else station_start_year
-        end_year = self._year_end if self._year_end is not None else station_end_year
-        
-        # Create date bounds in local timezone
-        if self._data_type == 'BOM':
-            # For BOM, we use the start and end of the year
-            start_date = datetime(start_year, 1, 1)
-            end_date = datetime(end_year, 12, 31, 23, 59, 59)
-        elif self._data_type == 'NOAA':
-            # For NOAA, we add buffer days before and after
-            start_date = datetime(start_year - 1, 12, 25)
-            end_date = datetime(end_year + 1, 1, 5, 23, 59, 59)
-        else:
-            raise ValueError(f"Unsupported data type: {self._data_type}")
-        
-        # For UTC, convert to UTC timezone
-        if self._time_zone == 'UTC':
-            start_date_utc = start_date.astimezone(pytz.UTC)
-            end_date_utc = end_date.astimezone(pytz.UTC)
-            return start_date_utc, end_date_utc
-        else:
-            # For LocalTime, return the local timezone dates
-            return start_date, end_date
-    
-    def _standardize_timezone(self, data: pd.DataFrame, to_timezone: str) -> pd.DataFrame:
-        """
-        Standardize timezone handling for weather data.
-        
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Input data with datetime index
-        to_timezone : str
-            Target timezone ('UTC' or 'LocalTime')
-            
-        Returns
-        -------
-        pd.DataFrame
-            Data with standardized timezone columns and index
-        """
-        try:
-            print(f"Standardizing timezone to {to_timezone}")
-            print(f"Input data index type: {type(data.index)}")
-            print(f"Input data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
-            
-            if not hasattr(data.index, 'tz') or data.index.tz is None:
-                print("DataFrame index is not timezone-aware. Attempting to localize...")
-                # Try to localize the index to the station timezone
-                try:
-                    station_tz = self._actual_timezone
-                    print(f"Localizing index to {station_tz}")
-                    data.index = pd.DatetimeIndex(data.index).tz_localize(station_tz)
-                    print(f"Index localized successfully. New timezone: {data.index.tz}")
-                except Exception as e:
-                    print(f"Error localizing index: {e}")
-                    raise ValueError("DataFrame index must be timezone-aware")
-            
-            df = data.copy()
-            
-            # Get the actual timezone from the station info
-            station_tz = self._actual_timezone
-            print(f"Station timezone: {station_tz}")
-            
-            # Standardize timezone conversion
-            if to_timezone == 'UTC':
-                # Convert index to UTC
-                print("Converting index to UTC")
-                df.index = df.index.tz_convert('UTC')
-                df.index.name = 'UTC'
-                # Add LocalTime column
-                print(f"Adding LocalTime column with timezone {station_tz}")
-                df['LocalTime'] = df.index.tz_convert(station_tz)
-            else:  # LocalTime
-                # Convert index to station timezone
-                print(f"Converting index to station timezone {station_tz}")
-                df.index = df.index.tz_convert(station_tz)
-                df.index.name = 'LocalTime'
-                # Add UTC column
-                print("Adding UTC column")
-                df['UTC'] = df.index.tz_convert('UTC')
-            
-            print(f"Timezone standardization complete. Output index timezone: {df.index.tz}")
-            return df
-        except Exception as e:
-            print(f"Error standardizing timezone: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
-    def _process_data(self, data: pd.DataFrame, yearStart: int, yearEnd: int, timeZone: str) -> pd.DataFrame:
-        """
-        Process and filter imported data.
-        
-        Parameters
-        ----------
-        data : pd.DataFrame
-            Raw imported data
-        yearStart : int
-            Start year
-        yearEnd : int
-            End year
-        timeZone : str
-            Time zone
-            
-        Returns
-        -------
-        pd.DataFrame
-            Processed and filtered data
-        """
-        # Convert timezone first
-        data = self._standardize_timezone(data, timeZone)
-        
-        # Get the appropriate date column for filtering
-        date_col = data.index.name
-        
-        # Create date bounds in the appropriate timezone
-        tz = pytz.UTC if timeZone == 'UTC' else self._actual_timezone
-        start_date = pd.Timestamp(f"{yearStart}-01-01", tz=tz)
-        end_date = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=tz)
-        
-        # Filter data
-        if self._data_type == 'BOM' and timeZone == 'UTC':
-            # Special case for BOM UTC data
-            data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
-        else:
-            data = data[(data.index >= start_date) & (data.index <= end_date)]
-        
-        # Log import status
-        if len(data) > 0:
-            actual_start_year = data.index.min().year
-            actual_end_year = data.index.max().year
-            print(f"Data imported successfully for years {actual_start_year} to {actual_end_year}")
-        else:
-            print("No data found for the specified date range")
-        
-        return data
     
     @abstractmethod
     def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
@@ -472,30 +289,14 @@ class WeatherDataImporter(ABC):
         timeZone = timeZone if timeZone is not None else self._time_zone
         save_raw = save_raw if save_raw is not None else self._save_raw
         
-        # Validate years
-        if yearStart > yearEnd:
-            raise ValueError("yearStart must be less than or equal to yearEnd")
-        
-        # Try to read from cache if save_raw is enabled
-        if save_raw:
-            try:
-                data = self._read_from_cache()
-                if data is not None:
-                    # Get station information
-                    try:
-                        station = self._station_db.get_station(self._station_id)
-                    except Exception as e:
-                        print(f"Warning: Could not get station information: {e}")
-                        station = None
-                    return WeatherData(data, station)
-            except Exception as e:
-                print(f"Error reading from cache: {e}")
+        # Try to read from cache first
+        data = self._read_from_cache()
+        if data is not None:
+            print(f"Using cached data for station {self._station_id}")
+            return WeatherData(data, self.station)
         
         # Import data from source
         data = self._import_from_source(yearStart, yearEnd, interval, timeZone)
-        
-        # Process and filter data
-        data = self._process_data(data, yearStart, yearEnd, timeZone)
         
         # Save to cache if requested
         if save_raw:
@@ -504,15 +305,8 @@ class WeatherDataImporter(ABC):
             except Exception as e:
                 print(f"Error saving to cache: {e}")
         
-        # Get station information
-        try:
-            station = self._station_db.get_station(self._station_id)
-        except Exception as e:
-            print(f"Warning: Could not get station information: {e}")
-            station = None
-        
         # Create and return a WeatherData object with station information
-        return WeatherData(data, station)
+        return WeatherData(data, self.station)
 
 class BOMWeatherDataImporter(WeatherDataImporter):
     """
@@ -521,28 +315,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
     This class handles the import of weather data from BOM sources, including
     data preprocessing, caching, and timezone conversions.
     """
-    
-    # BOM field names mapping to our standardized names
-    _bom_names = {
-        'Precipitation': 'rainfall',
-        'Air Temperature': 'air_temperature',
-        'Dew Point': 'dew_point',
-        'Relative Humidity': 'rel_humidity',
-        'Wind Speed': 'wind_spd_kmh',
-        'Wind Direction': 'wind_dir_deg',
-        'Wind Gust': 'wind_gust_kmh',
-        'Station Level Pressure': 'pres',
-        'CloudOktass_col': 'cloud_oktas',
-        'Visibility': 'visibility',
-        'Delta-T': 'delta_t'
-    }
-    
-    # Unified observation types for new data
-    UNIFIED_OBS_TYPES_NEWDATA = [
-        'obs_period_time_utc', 'wind_dir_deg', 'wind_spd_kmh', 'wind_gust_kmh',
-        'pres', 'air_temperature', 'dew_point', 'delta_t', 'rel_humidity',
-        'rainfall', 'visibility', 'cloud_oktas'
-    ]
     
     def __init__(self, station_id: str, **kwargs):
         """
@@ -585,16 +357,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Imported data.
         """
-        # Try to read from cache first
-        cached_data = self._read_from_cache()
-        if cached_data is not None:
-            print(f"Using cached data for BOM station {self._station_id}")
-            return cached_data
-        
-        # Get date bounds
-        start_date, end_date = self._get_date_bounds()
-        
-        # Import data from BOM
         print(f"Importing BOM data for station {self._station_id} from {yearStart} to {yearEnd}")
         
         try:
@@ -611,7 +373,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             }
             
             import requests
-            import tempfile
             
             print(f"Making API request to {url} with body: {body}")
             response_url = requests.post(url, json=body)
@@ -626,93 +387,59 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             response_data = requests.get(signed_url)
 
             if response_data.status_code == 200:
-                # Create a temporary file to save the response content
-                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-                    temp_file.write(response_data.content)
-                    temp_file_path = temp_file.name
-                    print(f"Reading data from temporary file: {temp_file_path}")
-                    data = pd.read_pickle(temp_file_path, compression='zip') 
-                    print("Data imported successfully")
-                os.remove(temp_file_path) 
+                # Read data directly from memory instead of saving to file
+                import io
+                data = pd.read_pickle(io.BytesIO(response_data.content), compression='zip')
+                print("Data imported successfully")
             else:
                 raise ValueError(f"API request failed with status code: {response_data.status_code}")
             
-            # Switch UTC and Local time datetime index if needed 
-            if timeZone != data.index.name:
-                print(f"Switching index from {data.index.name} to {timeZone}")
-                data = data.reset_index()
-                data = data.set_index(data.columns[1])
+            # BOM data comes with both UTC and LocalTime columns
+            # The index is set to LocalTime by default
             
-            print(f"Data imported successfully. Shape: {data.shape}")
+            # If user wants UTC timezone but data index is LocalTime, swap them
+            if timeZone == 'UTC' and data.index.name == 'LocalTime':
+                print("Swapping index from LocalTime to UTC")
+                # Check if UTC column exists
+                if 'UTC' in data.columns:
+                    # Save the LocalTime column
+                    data['LocalTime'] = data.index
+                    # Reset index and set UTC as the new index
+                    data = data.reset_index().set_index('UTC')
+                    data.index.name = 'UTC'
+                else:
+                    print("Warning: UTC column not found in data. Cannot swap index.")
+            
+            # Filter data based on year range
+            if data.index.name == 'LocalTime':
+                # Get the station timezone
+                if self.station is not None and hasattr(self.station, 'timezone_name'):
+                    station_tz = self.station.timezone_name
+                else:
+                    station_tz = 'Australia/Sydney'  # Default timezone
+                
+                # Ensure index has timezone info
+                if not hasattr(data.index, 'tz') or data.index.tz is None:
+                    data.index = pd.DatetimeIndex(data.index).tz_localize(station_tz)
+                
+                # Filter by year
+                data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
+            else:  # UTC
+                # Ensure index has timezone info
+                if not hasattr(data.index, 'tz') or data.index.tz is None:
+                    data.index = pd.DatetimeIndex(data.index).tz_localize('UTC')
+                
+                # Filter by year
+                data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
+            
+            print(f"Data filtered successfully. Shape: {data.shape}")
             print(f"Data index type: {type(data.index)}")
             print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
             print(f"Data columns: {data.columns.tolist()}")
             
-            # Process data
-            data = self._process_bom_data(data, timeZone)
-            
-            # Save to cache
-            if self._save_raw:
-                self._save_to_cache(data)
-            
             return data
         except Exception as e:
             print(f"Error importing BOM data: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
-    def _process_bom_data(self, data: pd.DataFrame, timeZone: str) -> pd.DataFrame:
-        """
-        Process BOM data.
-        
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            Raw BOM data.
-        timeZone : str
-            Time zone.
-        
-        Returns
-        -------
-        pandas.DataFrame
-            Processed data.
-        """
-        try:
-            print(f"Processing BOM data. Input shape: {data.shape}")
-            print(f"Input columns: {data.columns.tolist()}")
-            print(f"Input index type: {type(data.index)}")
-            print(f"Input index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
-            
-            df = data.copy()
-            
-            # Rename columns to standardized names
-            for bom_name, std_name in self._bom_names.items():
-                if bom_name in df.columns:
-                    print(f"Renaming column {bom_name} to {std_name}")
-                    df.rename(columns={bom_name: std_name}, inplace=True)
-            
-            # Ensure all required columns exist
-            for col in self.UNIFIED_OBS_TYPES_NEWDATA:
-                if col not in df.columns and col not in ['obs_period_time_utc']:
-                    print(f"Adding missing column {col}")
-                    df[col] = np.nan
-            
-            print(f"Processed data shape: {df.shape}")
-            print(f"Processed columns: {df.columns.tolist()}")
-            
-            # Standardize timezone
-            print(f"Standardizing timezone to {timeZone}")
-            result = self._standardize_timezone(df, timeZone)
-            
-            print(f"Final data shape: {result.shape}")
-            print(f"Final columns: {result.columns.tolist()}")
-            print(f"Final index type: {type(result.index)}")
-            print(f"Final index timezone: {result.index.tz if hasattr(result.index, 'tz') else 'None'}")
-            
-            return result
-        except Exception as e:
-            print(f"Error processing BOM data: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -740,48 +467,6 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         'VISIB': 'visibility',
         'WDSP': 'wind_spd_kmh',
         'GUST': 'wind_gust_kmh'
-    }
-    
-    # Move _names and _mandatory_section_groups here
-    _names = {
-        'STATION': 'Station',
-        'DATE': 'UTC',
-        'LATITUDE': 'Latitude',
-        'LONGITUDE': 'Longitude',
-        'ELEVATION': 'Elevation',
-        'NAME': 'Name',
-        'REPORT_TYPE': 'ReportType',
-        'SOURCE': 'Source',
-        'HourlyDewPointTemperature': 'DewPointTemp',
-        'HourlyDryBulbTemperature': 'Temperature',
-        'HourlyPrecipitation': 'RainCumulative',
-        'HourlyPresentWeatherType': 'PresentWeather',
-        'HourlyPressureChange': 'PressureChange',
-        'HourlyPressureTendency': 'PressureTendency',
-        'HourlyRelativeHumidity': 'RelativeHumidity',
-        'HourlySeaLevelPressure': 'SeaLevelPressure',
-        'HourlyStationPressure': 'StationPressure',
-        'HourlyVisibility': 'Visibility',
-        'HourlyWetBulbTemperature': 'WetBulbTemp',
-        'HourlyWindDirection': 'WindDir',
-        'HourlyWindSpeed': 'WindSpeed',
-        'Sunrise': 'Sunrise',
-        'Sunset': 'Sunset',
-        'CloudLayerHeight': 'CloudHgt',
-        'CloudLayerOktas': 'CloudOktas',
-        'WindType': 'WindType',
-        'QualityControlWindSpeed': 'QCWindSpeed',
-        'QualityControlName': 'QCName',
-        'QualityControlWindDirection': 'QCWindDir'
-    }
-    
-    _mandatory_section_groups = {
-        'WND': ['WindDir', 'WindSpeed', 'WindType', 'QCWindSpeed', 'QCWindDir'],
-        'CIG': ['CloudHgt', 'QCName'],
-        'VIS': ['Visibility', 'QCName'],
-        'TMP': ['Temperature', 'QCName'],
-        'DEW': ['DewPointTemp', 'QCName'],
-        'SLP': ['SeaLevelPressure', 'QCName']
     }
     
     def __init__(self, station_id: str, api_token: Optional[str] = None, **kwargs):
@@ -825,6 +510,28 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             raise ValueError("API token must be a string")
         self._api_token = value
     
+    def _get_date_bounds(self, yearStart: int, yearEnd: int) -> Tuple[datetime, datetime]:
+        """
+        Get date bounds for NOAA API call.
+        
+        Parameters
+        ----------
+        yearStart : int
+            Start year.
+        yearEnd : int
+            End year.
+            
+        Returns
+        -------
+        Tuple[datetime, datetime]
+            Start and end datetime bounds.
+        """
+        # For NOAA, we add buffer days before and after
+        start_date = datetime(yearStart - 1, 12, 25)
+        end_date = datetime(yearEnd + 1, 1, 5, 23, 59, 59)
+        
+        return start_date, end_date
+    
     def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
         """
         Import data from NOAA source.
@@ -845,68 +552,96 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Imported data.
         """
-        cached_data = self._read_from_cache()
-        if cached_data is not None:
-            print(f"Using cached data for NOAA station {self._station_id}")
-            return cached_data
-
-        start_date, end_date = self._get_date_bounds()
         print(f"Importing NOAA data for station {self._station_id} from {yearStart} to {yearEnd}")
+        
+        # Get date bounds for API call
+        start_date, end_date = self._get_date_bounds(yearStart, yearEnd)
+        
+        # NOAA API requires dates in UTC
+        # If user wants LocalTime, we need to adjust the dates
+        if timeZone == 'LocalTime':
+            # Get the station timezone
+            if self.station is not None and hasattr(self.station, 'timezone_name'):
+                station_tz = self.station.timezone_name
+            else:
+                station_tz = 'Australia/Sydney'  # Default timezone
+                
+            # Convert LocalTime dates to UTC for API call
+            if not hasattr(start_date, 'tzinfo') or start_date.tzinfo is None:
+                local_start = pytz.timezone(station_tz).localize(start_date)
+            else:
+                local_start = start_date
+            start_date_utc = local_start.astimezone(pytz.UTC)
+            
+            if not hasattr(end_date, 'tzinfo') or end_date.tzinfo is None:
+                local_end = pytz.timezone(station_tz).localize(end_date)
+            else:
+                local_end = end_date
+            end_date_utc = local_end.astimezone(pytz.UTC)
+            
+            # Format dates for API request
+            start_date_str = start_date_utc.strftime('%Y-%m-%d')
+            end_date_str = end_date_utc.strftime('%Y-%m-%d')
+        else:
+            # No adjustment needed for UTC
+            # Format dates for API request
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        print(f"API date range: {start_date_str} to {end_date_str}")
 
-        # Directly implement the logic from _getNOAA_api
+        # Make API request
         data = self._make_api_request(
             url=self.API_ENDPOINT,
             params={
                 'datasetid': 'GHCND',
                 'stationid': f'GHCND:{self._station_id}',
-                'startdate': f'{yearStart}-01-01',
-                'enddate': f'{yearEnd}-12-31',
+                'startdate': start_date_str,
+                'enddate': end_date_str,
                 'units': 'metric',
                 'limit': 1000
             }
         )
 
-        if data is None:
+        if data is None or 'results' not in data:
             raise ValueError("Failed to retrieve data from NOAA API")
 
         df = pd.DataFrame(data['results'])
-        df.rename(columns=self._noaa_names, inplace=True)
-
-        if timeZone == 'LocalTime':
-            local_time_col = 'LocalTime'
-            if local_time_col in df.columns:
-                start_date_local = pd.Timestamp(f"{yearStart}-01-01", tz=self._timezone)
-                end_date_local = pd.Timestamp(f"{yearEnd}-12-31 23:59:59", tz=self._timezone)
-                df = df[(df[local_time_col] >= start_date_local) & (df[local_time_col] <= end_date_local)]
-
-        if self._save_raw:
-            self._save_to_cache(df)
-
-        return df
-    
-    def _process_noaa_data(self, data: pd.DataFrame, timeZone: str) -> pd.DataFrame:
-        """
-        Process NOAA data.
         
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            Data to process.
-        timeZone : str
-            Time zone.
-        
-        Returns
-        -------
-        pandas.DataFrame
-            Processed data.
-        """
-        df = data.copy()
+        # Convert date column to datetime and set as index
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.set_index('date')
+            df.index.name = 'UTC'
+            
+            # Add timezone info to index
+            df.index = df.index.tz_localize('UTC')
         
         # Rename columns using NOAA field mappings
         df.rename(columns=self._noaa_names, inplace=True)
         
-        # Standardize timezone
-        return self._standardize_timezone(df, timeZone)
+        # If user wants LocalTime, convert the index
+        if timeZone == 'LocalTime':
+            # Get the station timezone
+            if self.station is not None and hasattr(self.station, 'timezone_name'):
+                station_tz = self.station.timezone_name
+            else:
+                station_tz = 'Australia/Sydney'  # Default timezone
+            
+            # Convert index to LocalTime
+            df['LocalTime'] = df.index.tz_convert(station_tz)
+            df = df.reset_index().set_index('LocalTime')
+            df.index.name = 'LocalTime'
+        
+        # Filter data to requested years
+        df = df[(df.index.year >= yearStart) & (df.index.year <= yearEnd)]
+        
+        print(f"Data filtered successfully. Shape: {df.shape}")
+        print(f"Data index type: {type(df.index)}")
+        print(f"Data index timezone: {df.index.tz if hasattr(df.index, 'tz') else 'None'}")
+        print(f"Data columns: {df.columns.tolist()}")
+        
+        return df
     
     def _make_api_request(self, url: str, params: Dict[str, Any], max_retries: int = 3) -> Optional[Dict[str, Any]]:
         """
