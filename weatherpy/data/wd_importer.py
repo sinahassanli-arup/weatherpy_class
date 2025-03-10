@@ -415,9 +415,7 @@ class BOMWeatherDataImporter(WeatherDataImporter):
                 # Get the station timezone
                 if self.station is not None and hasattr(self.station, 'timezone_name'):
                     station_tz = self.station.timezone_name
-                else:
-                    station_tz = 'Australia/Sydney'  # Default timezone
-                
+
                 # Ensure index has timezone info
                 if not hasattr(data.index, 'tz') or data.index.tz is None:
                     data.index = pd.DatetimeIndex(data.index).tz_localize(station_tz)
@@ -452,24 +450,26 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
     API requests, caching, and data preprocessing.
     """
     
-    # NOAA API endpoint
-    API_ENDPOINT = "https://www.ncdc.noaa.gov/cdo-web/api/v2/data?"
+    # NOAA API endpoint - using the legacy endpoint that doesn't require a token
+    API_ENDPOINT = "https://www.ncei.noaa.gov/access/services/data/v1?"
     
     # NOAA field names mapping to our standardized names
     _noaa_names = {
-        'TEMP': 'air_temperature',
-        'DEWP': 'dew_point',
-        'SLP': 'pres',
-        'PRCP': 'rainfall',
-        'RHUM': 'rel_humidity',
-        'WDIR': 'wind_dir_deg',
-        'CLDC': 'cloud_oktas',
-        'VISIB': 'visibility',
-        'WDSP': 'wind_spd_kmh',
-        'GUST': 'wind_gust_kmh'
+        'Temperature': 'air_temperature',
+        'DewPointTemp': 'dew_point',
+        'SeaLevelPressure': 'pres',
+        'RainCumulative': 'rainfall',
+        'CloudOktas': 'cloud_oktas',
+        'Visibility': 'visibility',
+        'WindDir': 'wind_dir_deg',
+        'WindSpeed': 'wind_spd_kmh',
+        'WindGust': 'wind_gust_kmh'
     }
     
-    def __init__(self, station_id: str, api_token: Optional[str] = None, **kwargs):
+    # NOAA data types to request
+    _data_types = 'WND,CIG,VIS,TMP,DEW,SLP,LONGITUDE,LATITUDE,ELEVATION,GA1,AA2'
+    
+    def __init__(self, station_id: str, **kwargs):
         """
         Initialize the NOAA weather data importer.
         
@@ -477,8 +477,6 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         ----------
         station_id : str
             NOAA station ID.
-        api_token : str, optional
-            NOAA API token. If None, uses the default token.
         **kwargs : dict
             Additional parameters to pass to the parent class.
         """
@@ -492,23 +490,8 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         if len(station_id) > 11:
             raise ValueError(f"NOAA station ID must be max 11 characters, got: {station_id}")
         
-        # Set API token
-        self._api_token = api_token or "YourDefaultTokenHere"  # Replace with your default token
-        
         # Initialize request cache
         self._request_cache = {}
-    
-    @property
-    def api_token(self) -> str:
-        """Get the API token."""
-        return self._api_token
-    
-    @api_token.setter
-    def api_token(self, value: str):
-        """Set the API token."""
-        if not isinstance(value, str):
-            raise ValueError("API token must be a string")
-        self._api_token = value
     
     def _get_date_bounds(self, yearStart: int, yearEnd: int) -> Tuple[datetime, datetime]:
         """
@@ -557,68 +540,82 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Get date bounds for API call
         start_date, end_date = self._get_date_bounds(yearStart, yearEnd)
         
-        # NOAA API requires dates in UTC
-        # If user wants LocalTime, we need to adjust the dates
-        if timeZone == 'LocalTime':
-            # Get the station timezone
-            if self.station is not None and hasattr(self.station, 'timezone_name'):
-                station_tz = self.station.timezone_name
-            else:
-                station_tz = 'Australia/Sydney'  # Default timezone
-                
-            # Convert LocalTime dates to UTC for API call
-            if not hasattr(start_date, 'tzinfo') or start_date.tzinfo is None:
-                local_start = pytz.timezone(station_tz).localize(start_date)
-            else:
-                local_start = start_date
-            start_date_utc = local_start.astimezone(pytz.UTC)
-            
-            if not hasattr(end_date, 'tzinfo') or end_date.tzinfo is None:
-                local_end = pytz.timezone(station_tz).localize(end_date)
-            else:
-                local_end = end_date
-            end_date_utc = local_end.astimezone(pytz.UTC)
-            
-            # Format dates for API request
-            start_date_str = start_date_utc.strftime('%Y-%m-%d')
-            end_date_str = end_date_utc.strftime('%Y-%m-%d')
-        else:
-            # No adjustment needed for UTC
-            # Format dates for API request
-            start_date_str = start_date.strftime('%Y-%m-%d')
-            end_date_str = end_date.strftime('%Y-%m-%d')
+        # Format dates for API request
+        start_date_str = start_date.strftime('%Y-%m-%dT%H:%M:00')
+        end_date_str = end_date.strftime('%Y-%m-%dT%H:%M:00')
         
         print(f"API date range: {start_date_str} to {end_date_str}")
-
-        # Make API request
-        data = self._make_api_request(
-            url=self.API_ENDPOINT,
-            params={
-                'datasetid': 'GHCND',
-                'stationid': f'GHCND:{self._station_id}',
-                'startdate': start_date_str,
-                'enddate': end_date_str,
-                'units': 'metric',
-                'limit': 1000
-            }
-        )
-
-        if data is None or 'results' not in data:
-            raise ValueError("Failed to retrieve data from NOAA API")
-
-        df = pd.DataFrame(data['results'])
         
-        # Convert date column to datetime and set as index
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date')
-            df.index.name = 'UTC'
-            
-            # Add timezone info to index
-            df.index = df.index.tz_localize('UTC')
+        # Generate API request URL
+        station_id_int = int(self._station_id)
+        api_url = (self.API_ENDPOINT +
+                  '&'.join(
+                      ('dataset=global-hourly',
+                       f'stations={station_id_int:011d}',
+                       f'dataTypes={self._data_types}',
+                       f'startDate={start_date_str}',
+                       f'endDate={end_date_str}',
+                       'format=json'
+                       )
+                      )
+                  )
+        
+        # Make API request
+        data = self._make_api_request(api_url)
+        
+        if data is None or len(data) == 0:
+            raise ValueError("Failed to retrieve data from NOAA API")
+        
+        # Convert date to datetime
+        data['DATE'] = pd.to_datetime(data['DATE'])
+        
+        # Rename standard columns
+        name_mapping = {
+            'DATE': 'UTC',
+            'LATITUDE': 'lat',
+            'LONGITUDE': 'lon',
+            'ELEVATION': 'elevation'
+        }
+        data.rename(name_mapping, axis='columns', inplace=True)
+        
+        # Process data groups
+        mandatory_groups = {
+            'WND': ['WindDir', 'QCWindDir', 'WindType', 'WindSpeed', 'QCWindSpeed'],
+            'CIG': ['CloudHgt', 'QCCloudHgt', 'CeilingDetCode', 'CavokCode'],
+            'VIS': ['Visibility', 'QCVisibility', 'VisibilityVarCode', 'QCVisVar'],
+            'TMP': ['Temperature', 'QCTemperature'],
+            'DEW': ['DewPointTemp','QCDewPoint'],
+            'SLP': ['SeaLevelPressure','QCSeaLevelPressure'],
+            'GA1': ['CloudOktas', 'GA2', 'GA3', 'GA4', 'GA5', 'GA6'],
+            'AA2': ['AA1', 'RainCumulative', 'AA3', 'AA4']
+        }
+        
+        # Split mandatory groups and rename
+        for group_name, group_fields in mandatory_groups.items():
+            if group_name in data.columns:
+                data[group_fields] = data[group_name].str.split(',', expand=True)
+                data.drop(group_name, axis='columns', inplace=True)
+        
+        # Set DateTime Index
+        data.set_index('UTC', inplace=True)
+        if 'STATION' in data.columns:
+            data.drop('STATION', axis='columns', inplace=True)
+        
+        # Convert numeric columns
+        for col in data.columns:
+            try:
+                data[col] = pd.to_numeric(data[col], errors="raise")
+            except:
+                pass
+        
+        # Add timezone info to index
+        data.index = data.index.tz_localize('UTC')
+        
+        # Convert units and fix dimensions
+        data = self._fix_dimensions(data)
         
         # Rename columns using NOAA field mappings
-        df.rename(columns=self._noaa_names, inplace=True)
+        data.rename(columns=self._noaa_names, inplace=True)
         
         # If user wants LocalTime, convert the index
         if timeZone == 'LocalTime':
@@ -629,21 +626,60 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 station_tz = 'Australia/Sydney'  # Default timezone
             
             # Convert index to LocalTime
-            df['LocalTime'] = df.index.tz_convert(station_tz)
-            df = df.reset_index().set_index('LocalTime')
-            df.index.name = 'LocalTime'
+            data['LocalTime'] = data.index.tz_convert(station_tz)
+            data = data.reset_index().set_index('LocalTime')
+            data.index.name = 'LocalTime'
         
         # Filter data to requested years
-        df = df[(df.index.year >= yearStart) & (df.index.year <= yearEnd)]
+        data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
         
-        print(f"Data filtered successfully. Shape: {df.shape}")
-        print(f"Data index type: {type(df.index)}")
-        print(f"Data index timezone: {df.index.tz if hasattr(df.index, 'tz') else 'None'}")
-        print(f"Data columns: {df.columns.tolist()}")
+        print(f"Data filtered successfully. Shape: {data.shape}")
+        print(f"Data index type: {type(data.index)}")
+        print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
+        print(f"Data columns: {data.columns.tolist()}")
+        
+        return data
+    
+    def _fix_dimensions(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Fix dimensions and convert units for NOAA data.
+        
+        Parameters
+        ----------
+        data : pandas.DataFrame
+            Raw NOAA data.
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Processed data with fixed dimensions and units.
+        """
+        # Make a copy to avoid modifying the original
+        df = data.copy()
+        
+        # Convert wind speed from tenths of meters per second to km/h
+        if 'WindSpeed' in df.columns:
+            df['WindSpeed'] = df['WindSpeed'].astype(float) * 0.1 * 3.6  # 0.1 m/s to km/h
+        
+        # Convert temperature from tenths of degrees Celsius
+        if 'Temperature' in df.columns:
+            df['Temperature'] = df['Temperature'].astype(float) * 0.1
+        
+        # Convert dew point from tenths of degrees Celsius
+        if 'DewPointTemp' in df.columns:
+            df['DewPointTemp'] = df['DewPointTemp'].astype(float) * 0.1
+        
+        # Convert sea level pressure from tenths of hPa
+        if 'SeaLevelPressure' in df.columns:
+            df['SeaLevelPressure'] = df['SeaLevelPressure'].astype(float) * 0.1
+        
+        # Convert visibility from meters to kilometers
+        if 'Visibility' in df.columns:
+            df['Visibility'] = df['Visibility'].astype(float) / 1000
         
         return df
     
-    def _make_api_request(self, url: str, params: Dict[str, Any], max_retries: int = 3) -> Optional[Dict[str, Any]]:
+    def _make_api_request(self, url: str, max_retries: int = 3) -> Optional[pd.DataFrame]:
         """
         Make API request with retries.
         
@@ -651,38 +687,35 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         ----------
         url : str
             API URL.
-        params : Dict[str, Any]
-            Request parameters.
         max_retries : int, optional
             Maximum number of retries. The default is 3.
         
         Returns
         -------
-        Optional[Dict[str, Any]]
-            Response JSON, or None if the request failed.
+        Optional[pandas.DataFrame]
+            Response data as DataFrame, or None if the request failed.
         """
-        # Create cache key from URL and parameters
-        cache_key = f"{url}_{str(params)}"
+        # Create cache key from URL
+        cache_key = url
         
         # Check if response is in cache
         if cache_key in self._request_cache:
             return self._request_cache[cache_key]
         
-        # Set up headers
-        headers = {
-            'token': self._api_token
-        }
-        
         # Make request with exponential backoff
         for retry in range(max_retries):
             try:
-                response = requests.get(url, params=params, headers=headers)
+                print(f"API attempt {retry+1}/{max_retries}")
+                response = requests.get(url)
                 
                 # Check if request was successful
                 if response.status_code == 200:
+                    # Parse JSON data
+                    data = pd.read_json(response.text)
+                    
                     # Cache response
-                    self._request_cache[cache_key] = response.json()
-                    return response.json()
+                    self._request_cache[cache_key] = data
+                    return data
                 
                 # Handle rate limiting
                 if response.status_code == 429:
@@ -693,6 +726,14 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 
                 # Handle other errors
                 print(f"API request failed with status code {response.status_code}")
+                if hasattr(response, 'json'):
+                    try:
+                        error_data = response.json()
+                        if 'errors' in error_data:
+                            for err in error_data['errors']:
+                                print(f"Error: {err}")
+                    except:
+                        pass
                 return None
                 
             except Exception as e:
@@ -701,5 +742,4 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 print(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
         
-        print(f"Failed to make API request after {max_retries} retries")
         return None
