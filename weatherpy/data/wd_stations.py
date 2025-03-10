@@ -102,9 +102,9 @@ class WeatherStationDatabase:
             print(f"Error: Station database file not found at {db_file}")
             return pd.DataFrame()
         
-        # Load database
+        # Load database with string dtypes to preserve leading zeros
         try:
-            return pd.read_csv(db_file)
+            return pd.read_csv(db_file, dtype=str)
         except Exception as e:
             print(f"Error loading station database: {e}")
             return pd.DataFrame()
@@ -138,8 +138,7 @@ class WeatherStationDatabase:
             raise ValueError(f"Unsupported data type: {self.data_type}")
         
         if len(station_data) == 0:
-            print(f"Station not found: {station_id}")
-            return self._get_default_station(station_id)
+            raise ValueError(f"Station not found: {station_id}")
             
         return WeatherStation(station_data.iloc[0])
     
@@ -156,6 +155,11 @@ class WeatherStationDatabase:
         -------
         Dict[str, Any]
             Station information.
+        
+        Raises
+        ------
+        ValueError
+            If the station is not found.
         """
         try:
             # Print available station IDs for debugging
@@ -174,151 +178,39 @@ class WeatherStationDatabase:
             # Get station
             station = self.get_station(station_id)
             
-            # Convert to dictionary format based on data type
+            # Return station info
             if self.data_type == 'BOM':
                 return {
+                    'Station ID': station.code,
                     'Station Name': station.name,
-                    'State': station.data.get('State', 'Unknown'),
-                    'Country': 'Australia',
-                    'Latitude': station.latitude,
-                    'Longitude': station.longitude,
-                    'Elevation': station.elevation,
-                    'Start': station.start_year,
-                    'End': station.end_year,
-                    'Timezone Name': station.data.get('Timezone Name', 'Australia/Sydney'),
-                    'Timezone UTC': station.data.get('Timezone UTC', '+10:00')
+                    'Country': str(station.data.get('Country', 'Australia')),
+                    'State': str(station.data.get('State', 'Unknown')),
+                    'Timezone': str(station.data.get('Timezone Name', 'Australia/Sydney')),
+                    'Timezone Ofset': str(station.data.get('Timezone UTC', '+10:00')),
+                    'Coordinate': (station.latitude, station.longitude),
+                    'Altitude': station.elevation,
+                    'Years Active': f"{station.start_year} - {station.end_year}",
+                    'Source': 'BOM',
+                    'Data Available': station.available_measurements
                 }
             elif self.data_type == 'NOAA':
                 return {
+                    'Station ID': station.code,
                     'Station Name': station.name,
-                    'State': station.data.get('State', 'Unknown'),
-                    'Country': station.data.get('Country', 'United States'),
-                    'Latitude': station.latitude,
-                    'Longitude': station.longitude,
-                    'Elevation': station.elevation,
-                    'Start': station.start_year,
-                    'End': station.end_year,
-                    'Timezone Name': station.data.get('Timezone Name', 'America/New_York'),
-                    'Timezone UTC': station.data.get('Timezone UTC', '-05:00')
+                    'Country': str(station.data.get('Country', 'United States')),
+                    'State': str(station.data.get('State', 'Unknown')),
+                    'Coordinate': (station.latitude, station.longitude),
+                    'Altitude': station.elevation,
+                    'Years Active': f"{station.start_year} - {station.end_year}",
+                    'Source': 'NOAA',
+                    'Timezone': station.data.get('Timezone Name', 'America/New_York'),
+                    'Timezone Ofset': station.data.get('Timezone UTC', '-05:00')
                 }
             else:
                 raise ValueError(f"Unsupported data type: {self.data_type}")
         except Exception as e:
-            print(f"Error getting station info: {e}")
-            return self._get_default_station_info(station_id)
-    
-    def _get_default_station(self, station_id: str) -> WeatherStation:
-        """
-        Get default station when database lookup fails.
-        
-        Parameters
-        ----------
-        station_id : str
-            Station ID.
-        
-        Returns
-        -------
-        WeatherStation
-            Default station.
-        """
-        print(f"Using default station information for {station_id}")
-        
-        # Create default data based on data type
-        if self.data_type == 'BOM':
-            default_data = {
-                'Station Code': station_id,
-                'Station Name': f'BOM Station {station_id}',
-                'State': 'Unknown',
-                'Latitude': -33.0,
-                'Longitude': 151.0,
-                'Elevation': 0.0,
-                'Start': '2000',
-                'End': '2023',
-                'Timezone Name': 'Australia/Sydney',
-                'Timezone UTC': '+10:00'
-            }
-        elif self.data_type == 'NOAA':
-            default_data = {
-                'Station ID': station_id,
-                'Station Name': f'NOAA Station {station_id}',
-                'State': 'NY',
-                'Country': 'United States',
-                'Latitude': 40.779,
-                'Longitude': -73.88,
-                'Elevation': 3.0,
-                'Start': '1973-01-01',
-                'End': '2023-01-02',
-                'Timezone Name': 'America/New_York',
-                'Timezone UTC': '-05:00'
-            }
-        else:
-            default_data = {
-                'Station ID': station_id,
-                'Station Name': f'Unknown Station {station_id}',
-                'Latitude': 0.0,
-                'Longitude': 0.0,
-                'Elevation': 0.0,
-                'Start': '2000',
-                'End': '2023'
-            }
-        
-        return WeatherStation(pd.Series(default_data))
-    
-    def _get_default_station_info(self, station_id: str) -> Dict[str, Any]:
-        """
-        Get default station information when database lookup fails.
-        
-        Parameters
-        ----------
-        station_id : str
-            Station ID.
-        
-        Returns
-        -------
-        Dict[str, Any]
-            Default station information.
-        """
-        station = self._get_default_station(station_id)
-        
-        if self.data_type == 'BOM':
-            return {
-                'Station Name': station.name,
-                'State': 'Unknown',
-                'Country': 'Australia',
-                'Latitude': station.latitude,
-                'Longitude': station.longitude,
-                'Elevation': station.elevation,
-                'Start': station.start_year,
-                'End': station.end_year,
-                'Timezone Name': 'Australia/Sydney',
-                'Timezone UTC': '+10:00'
-            }
-        elif self.data_type == 'NOAA':
-            return {
-                'Station Name': station.name,
-                'State': 'NY',
-                'Country': 'United States',
-                'Latitude': station.latitude,
-                'Longitude': station.longitude,
-                'Elevation': station.elevation,
-                'Start': station.start_year,
-                'End': station.end_year,
-                'Timezone Name': 'America/New_York',
-                'Timezone UTC': '-05:00'
-            }
-        else:
-            return {
-                'Station Name': station.name,
-                'State': 'Unknown',
-                'Country': 'Unknown',
-                'Latitude': station.latitude,
-                'Longitude': station.longitude,
-                'Elevation': station.elevation,
-                'Start': station.start_year,
-                'End': station.end_year,
-                'Timezone Name': 'UTC',
-                'Timezone UTC': '+00:00'
-            }
+            # Re-raise the exception to propagate it to the caller
+            raise ValueError(f"Error getting station info: {e}")
     
     def find_stations(self,
                      city: Optional[str] = None,

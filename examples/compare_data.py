@@ -81,29 +81,35 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
         
         # Class-based model
         print(f'Importing OOP {dataType} data...')
-        if dataType == 'BOM':
-            importer = BOMWeatherDataImporter(
-                station_id=stationID,
-                data_type=dataType,
-                time_zone=timeZone,
-                year_start=yearStart,
-                year_end=yearEnd,
-                interval=interval
-            )
-        elif dataType == 'NOAA':
-            importer = NOAAWeatherDataImporter(
-                station_id=stationID,
-                data_type=dataType,
-                time_zone=timeZone,
-                year_start=yearStart,
-                year_end=yearEnd,
-                interval=interval
-            )
-        else:
-            raise ValueError(f"Unsupported data type: {dataType}")
-            
-        weather_data = importer.import_data()
-        data_class = weather_data.data
+        try:
+            if dataType == 'BOM':
+                importer = BOMWeatherDataImporter(
+                    station_id=stationID,
+                    data_type=dataType,
+                    time_zone=timeZone,
+                    year_start=yearStart,
+                    year_end=yearEnd,
+                    interval=interval
+                )
+            elif dataType == 'NOAA':
+                importer = NOAAWeatherDataImporter(
+                    station_id=stationID,
+                    data_type=dataType,
+                    time_zone=timeZone,
+                    year_start=yearStart,
+                    year_end=yearEnd,
+                    interval=interval
+                )
+            else:
+                raise ValueError(f"Unsupported data type: {dataType}")
+                
+            weather_data = importer.import_data()
+            data_class = weather_data.data
+        except ValueError as ve:
+            print(f"Error in OOP import: {ve}")
+            print("This is expected if the station ID is not found in the database.")
+            print("To fix this, use a valid station ID or modify the station database.")
+            return data_old, None
         
         # Compare data
         if data_old is not None and data_class is not None:
@@ -127,7 +133,7 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
 
 # Example usage
 input_data_1 = {
-    'stationID': '066037',
+    'stationID': '001006',  # Using a valid station ID from the database (WYNDHAM AERO)
     'dataType': 'BOM',
     'timeZone': 'UTC',
     'yearStart': 2010,
