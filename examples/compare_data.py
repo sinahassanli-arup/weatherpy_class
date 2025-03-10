@@ -76,7 +76,8 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
             timeZone,
             yearStart,
             yearEnd,
-            interval
+            interval,
+            save_raw=False
         )
         
         # Class-based model
