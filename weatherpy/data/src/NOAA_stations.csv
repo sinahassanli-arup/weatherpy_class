@@ -1,4 +1,4 @@
-Station Code,Station Name,Country,State,Latitude,Longitude,Elevation,Start,End,Timezone UTC,Timezone Name,Source,Wind Direction,Wind Speed,Wind Gust,Sea Level Pressure,Dry Bulb Temperature,Wet Bulb Temperature,Relative Humidity,Rain,Rain Intensity,Cloud Oktas,Mean Correction Factors
+Station ID,Station Name,Country,State,Latitude,Longitude,Elevation,Start,End,Timezone UTC,Timezone Name,Source,Wind Direction,Wind Speed,Wind Gust,Sea Level Pressure,Dry Bulb Temperature,Wet Bulb Temperature,Relative Humidity,Rain,Rain Intensity,Cloud Oktas,Mean Correction Factors
 00826899999,WXPOD8278,Afghanistan,,32.95,65.567,1156.7,19/05/2010,23/03/2012,UTC +04:30,Asia/Kabul,NOAA,,,,,,,,,,,
 01001099999,JAN MAYEN(NOR-NAVY),Norway,,70.933,-8.667,9.0,01/01/1931,31/01/2023,UTC +01:00,Arctic/Longyearbyen,NOAA,,,,,,,,,,,
 01001499999,SORSTOKKEN,Norway,,59.792,5.341,48.8,20/11/1986,31/01/2023,UTC +01:00,Europe/Oslo,NOAA,,,,,,,,,,,

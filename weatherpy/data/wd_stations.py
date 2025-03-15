@@ -13,75 +13,26 @@ class WeatherStation:
     
     def __init__(self, data: pd.Series):
         """Initialize station with data."""
-        self.data = data
-        
-    @property
-    def id(self) -> str:
-        """Station ID."""
-        if 'Station Code' in self.data:
-            return str(self.data['Station Code'])
-        elif 'Station ID' in self.data:
-            return str(self.data['Station ID'])
-        return ""
-    
-    @property
-    def name(self) -> str:
-        """Station name."""
-        return str(self.data['Station Name'])
-    
-    @property
-    def country(self) -> str:
-        """Station country."""
-        return str(self.data.get('Country', ''))
-    
-    @property
-    def state(self) -> str:
-        """Station state."""
-        return str(self.data.get('State', ''))
-    
-    @property
-    def latitude(self) -> float:
-        """Station latitude."""
-        return float(self.data['Latitude'])
-    
-    @property
-    def longitude(self) -> float:
-        """Station longitude."""
-        return float(self.data['Longitude'])
-    
-    @property
-    def elevation(self) -> float:
-        """Station elevation."""
-        return float(self.data['Elevation'])
-    
-    @property
-    def start_year(self) -> str:
-        """Start year."""
-        return str(self.data['Start'])
-    
-    @property
-    def end_year(self) -> str:
-        """End year."""
-        return str(self.data['End'])
-    
-    @property
-    def timezone_name(self) -> str:
-        """Timezone name."""
-        return str(self.data.get('Timezone Name', ''))
-    
-    @property
-    def timezone_utc(self) -> str:
-        """Timezone UTC offset."""
-        return str(self.data.get('Timezone UTC', ''))
-    
-    @property
-    def source(self) -> str:
-        """Data source."""
-        return str(self.data.get('Source', ''))
-    
-    @property
-    def available_measurements(self) -> Dict[str, str]:
-        """Available measurements."""
+        self._data = data
+        self._id = str(data['Station ID'])
+        self._name = str(data['Station Name'])
+        self._country = str(data.get('Country', ''))
+        self._state = str(data.get('State', ''))
+        self._latitude = float(data['Latitude'])
+        self._longitude = float(data['Longitude'])
+        self._elevation = float(data['Elevation'])
+        self._timezone_name = str(data.get('Timezone Name', ''))
+        self._timezone_utc = str(data.get('Timezone UTC', ''))
+        self._source = str(data.get('Source', ''))
+        self.mean_correction_factors = data.get('Mean Correction Factor', {})
+        self._available_measurements = self._extract_measurements(data)
+
+        # Extract year as integer for calculations
+        self._start_year = self._extract_year(str(data['Start']))
+        self._end_year = self._extract_year(str(data['End']))
+
+    def _extract_measurements(self, data: pd.Series) -> Dict[str, str]:
+        """Extract available measurements from data."""
         measurements = {}
         measurement_types = [
             'Wind Direction', 'Wind Speed', 'Wind Gust',
@@ -91,10 +42,74 @@ class WeatherStation:
         ]
         
         for col in measurement_types:
-            if col in self.data.index and str(self.data[col]).lower() == 'true':
+            if col in data.index and str(data[col]).lower() == 'true':
                 measurements[col] = 'True'
         return measurements
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def country(self) -> str:
+        return self._country
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def latitude(self) -> float:
+        return self._latitude
+
+    @property
+    def longitude(self) -> float:
+        return self._longitude
+
+    @property
+    def elevation(self) -> float:
+        return self._elevation
+
+    @property
+    def start_year(self) -> str:
+        return self._start_year
+
+    @property
+    def end_year(self) -> str:
+        return self._end_year
+
+    @property
+    def timezone_name(self) -> str:
+        return self._timezone_name
+
+    @property
+    def timezone_utc(self) -> str:
+        return self._timezone_utc
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    @property
+    def available_measurements(self) -> Dict[str, str]:
+        return self._available_measurements
     
+    def _extract_year(self, date_str: str) -> int:
+        """Extract year from a date string."""
+        try:
+            # If the date is in DD/MM/YYYY format, split and get the last part
+            if '/' in date_str:
+                return int(date_str.split('/')[-1])
+            # Otherwise, try to convert directly to int
+            return int(date_str)
+        except ValueError:
+            # Default to 1900 for start year and current year for end year
+            return 1900 if 'Start' in date_str else datetime.now().year
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert station to dictionary."""
         return {
@@ -108,7 +123,8 @@ class WeatherStation:
             'Altitude': self.elevation,
             'Years Active': f"{self.start_year} - {self.end_year}",
             'Source': self.source,
-            'Data Available': self.available_measurements
+            'Data Available': self.available_measurements,
+            'Mean Correction Factors': self.mean_correction_factors
         }
 
 class WeatherStationDatabase:
@@ -138,12 +154,8 @@ class WeatherStationDatabase:
         # Get the path to the stations database
         current_dir = Path(__file__).resolve().parent
         
-        if self.data_type == 'BOM':
-            db_file = current_dir / 'src' / 'BOM_stations_clean.csv'
-        elif self.data_type == 'NOAA':
-            db_file = current_dir / 'src' / 'NOAA_stations.csv'
-        else:
-            raise ValueError(f"Unsupported data type: {self.data_type}")
+        # Use the same column names and format for both NOAA and BOM
+        db_file = current_dir / 'src' / f'{self.data_type}_stations.csv'
         
         # Check if the file exists
         if not db_file.exists():
@@ -151,7 +163,14 @@ class WeatherStationDatabase:
         
         # Load database with string dtypes to preserve leading zeros
         try:
-            return pd.read_csv(db_file, dtype=str)
+            return pd.read_csv(db_file,converters={'Station ID':str,
+            'Station Name':str,'Country':str,'State':str,'Latitude':float,
+            'Longitude':float,'Elevation':str,'Start':str,'End':str,
+            'Timezone':str,'Source':str,'Wind Direction':str,
+            'Wind Speed':str,'Wind Gust':str,'Sea Level Pressure':str,
+            'Dry Bulb Temperature':str,'Wet Bulb Temperature':str,
+            'Relative Humidity':str,'Rain':str,'Rain Intensity':str,
+            'Cloud Oktas':str},index_col=False)
         except Exception as e:
             raise IOError(f"Error loading station database: {e}")
     
@@ -174,15 +193,9 @@ class WeatherStationDatabase:
         ValueError
             If the station is not found.
         """
-        if self.data_type == 'BOM':
-            station_id = str(station_id).zfill(6)
-            station_data = self._data[self._data['Station Code'] == station_id]
-        elif self.data_type == 'NOAA':
-            station_id = str(station_id)
-            station_data = self._data[self._data['Station ID'] == station_id]
-        else:
-            raise ValueError(f"Unsupported data type: {self.data_type}")
-        
+        station_id = str(station_id).zfill(6)  # Ensure ID is zero-padded
+        station_data = self._data[self._data['Station ID'] == station_id]
+
         if len(station_data) == 0:
             raise ValueError(f"Station not found: {station_id}")
             

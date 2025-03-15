@@ -26,7 +26,7 @@ class WeatherDataImporter(ABC):
     
     This class provides common functionality for importing weather data from
     different sources. It handles caching, date bounds, and timezone conversions.
-    Subclasses must implement the _import_from_source method.
+    Subclasses must implement the _import_from_server method.
     """
     
     def __init__(self, 
@@ -59,18 +59,15 @@ class WeatherDataImporter(ABC):
         self._save_raw = save_raw
         
         # Initialize station
-        try:
-            station_db = WeatherStationDatabase(data_type)
-            self.station = station_db.get_station(self._station_id)
-        except Exception as e:
-            print(f"Warning: Could not get station information: {e}")
-            self.station = None
+        station_db = WeatherStationDatabase(data_type=self._data_type)
+        self.station = station_db.get_station(self._station_id)
+
         
         # Validate inputs
         self._validate_inputs()
         
         # Validate years
-        self._year_start, self._year_end = self.validate_years()
+        self._year_start, self._year_end = self._validate_years()
         
     @property
     def station_id(self) -> str:
@@ -127,7 +124,7 @@ class WeatherDataImporter(ABC):
         elif self._data_type == 'NOAA' and self._interval != 30:
             raise ValueError("For NOAA data, interval must be 30 minutes")
     
-    def validate_years(self) -> Tuple[int, int]:
+    def _validate_years(self) -> Tuple[int, int]:
         """
         Validate station years.
         
@@ -238,7 +235,7 @@ class WeatherDataImporter(ABC):
             print(f"Error saving cache file: {e}")
     
     @abstractmethod
-    def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
         """
         Import data from the source.
         
@@ -296,7 +293,14 @@ class WeatherDataImporter(ABC):
             return WeatherData(data, self.station)
         
         # Import data from source
-        data = self._import_from_source(yearStart, yearEnd, interval, timeZone)
+        data = self._import_from_server(yearStart, yearEnd, interval, timeZone)
+        
+        # If user wants timezone that is different from the default timeZone, swap them
+        if timeZone != data.index.name:
+            data.reset_index(inplace=True)
+            data.set_index(data.columns[1], inplace=True, drop=True)
+            
+        data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
         
         # Save to cache if requested
         if save_raw:
@@ -337,7 +341,7 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         if len(station_id) != 6:
             raise ValueError(f"BOM station ID must be 6 digits, got: {station_id}")
     
-    def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
         """
         Import data from BOM source.
         
@@ -357,7 +361,7 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Imported data.
         """
-        print(f"Importing BOM data for station {self._station_id} from {yearStart} to {yearEnd}")
+        print(f"Importing BOM data for station {self._station_id}")
         
         try:
             # Direct implementation of BOM data import
@@ -377,7 +381,6 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             print(f"Making API request to {url} with body: {body}")
             response_url = requests.post(url, json=body)
             signed_url = response_url.json()['body']
-
             signed_url_statusCode = response_url.json()['statusCode']
             
             if signed_url_statusCode != 200:
@@ -388,59 +391,16 @@ class BOMWeatherDataImporter(WeatherDataImporter):
 
             if response_data.status_code == 200:
                 # Read data directly from memory instead of saving to file
-                import io
-                data = pd.read_pickle(io.BytesIO(response_data.content), compression='zip')
+                from io import BytesIO
+                data = pd.read_pickle(BytesIO(response_data.content), compression='zip')
                 print("Data imported successfully")
             else:
                 raise ValueError(f"API request failed with status code: {response_data.status_code}")
             
-            # BOM data comes with both UTC and LocalTime columns
-            # The index is set to LocalTime by default
-            
-            # If user wants UTC timezone but data index is LocalTime, swap them
-            if timeZone == 'UTC' and data.index.name == 'LocalTime':
-                print("Swapping index from LocalTime to UTC")
-                # Check if UTC column exists
-                if 'UTC' in data.columns:
-                    # Save the LocalTime column
-                    data['LocalTime'] = data.index
-                    # Reset index and set UTC as the new index
-                    data = data.reset_index().set_index('UTC')
-                    data.index.name = 'UTC'
-                else:
-                    print("Warning: UTC column not found in data. Cannot swap index.")
-            
-            # Filter data based on year range
-            if data.index.name == 'LocalTime':
-                # Get the station timezone
-                if self.station is not None and hasattr(self.station, 'timezone_name'):
-                    station_tz = self.station.timezone_name
-
-                # Ensure index has timezone info
-                if not hasattr(data.index, 'tz') or data.index.tz is None:
-                    data.index = pd.DatetimeIndex(data.index).tz_localize(station_tz)
-                
-                # Filter by year
-                data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
-            else:  # UTC
-                # Ensure index has timezone info
-                if not hasattr(data.index, 'tz') or data.index.tz is None:
-                    data.index = pd.DatetimeIndex(data.index).tz_localize('UTC')
-                
-                # Filter by year
-                data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
-            
-            print(f"Data filtered successfully. Shape: {data.shape}")
-            print(f"Data index type: {type(data.index)}")
-            print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
-            print(f"Data columns: {data.columns.tolist()}")
-            
             return data
         except Exception as e:
             print(f"Error importing BOM data: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+
 
 class NOAAWeatherDataImporter(WeatherDataImporter):
     """
@@ -455,13 +415,13 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
     
     # NOAA field names mapping to our standardized names
     _noaa_names = {
-        'Temperature': 'air_temperature',
-        'DewPointTemp': 'dew_point',
+        'DryBulbTemperature': 'air_temperature',
+        'DewPointTemperature': 'dew_point',
         'SeaLevelPressure': 'pres',
         'RainCumulative': 'rainfall',
         'CloudOktas': 'cloud_oktas',
         'Visibility': 'visibility',
-        'WindDir': 'wind_dir_deg',
+        'WindDirection': 'wind_dir_deg',
         'WindSpeed': 'wind_spd_kmh',
         'WindGust': 'wind_gust_kmh'
     }
@@ -495,7 +455,8 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
     
     def _get_date_bounds(self, yearStart: int, yearEnd: int) -> Tuple[datetime, datetime]:
         """
-        Get date bounds for NOAA API call.
+        Get UTC date bounds for NOAA API call. It will get 5 extra days before yearStart and 5 after the yearEnd.
+        The data should be clipped after import
         
         Parameters
         ----------
@@ -507,15 +468,18 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         Returns
         -------
         Tuple[datetime, datetime]
-            Start and end datetime bounds.
+            Start and end UTC datetime bounds (with extra days).
         """
-        # For NOAA, we add buffer days before and after
-        start_date = datetime(yearStart - 1, 12, 25)
-        end_date = datetime(yearEnd + 1, 1, 5, 23, 59, 59)
+        # Creates the upper and lower date bounds for the import
+        start_date_UTC = pytz.UTC.localize(datetime.strptime(str(yearStart - 1)+' 12 25 00:00','%Y %m %d %H:%M'))
+        end_date_UTC = pytz.UTC.localize(datetime.strptime(str(yearEnd + 1)+' 01 05 23:59','%Y %m %d %H:%M'))
         
-        return start_date, end_date
+        start_date_str = start_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
+        end_date_str = end_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
+        
+        return start_date_str, end_date_str
     
-    def _import_from_source(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
         """
         Import data from NOAA source.
         
@@ -540,11 +504,7 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Get date bounds for API call
         start_date, end_date = self._get_date_bounds(yearStart, yearEnd)
         
-        # Format dates for API request
-        start_date_str = start_date.strftime('%Y-%m-%dT%H:%M:00')
-        end_date_str = end_date.strftime('%Y-%m-%dT%H:%M:00')
-        
-        print(f"API date range: {start_date_str} to {end_date_str}")
+        print(f"API date range (5 extra days either end): {start_date} to {end_date}")
         
         # Generate API request URL
         station_id_int = int(self._station_id)
@@ -553,8 +513,8 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                       ('dataset=global-hourly',
                        f'stations={station_id_int:011d}',
                        f'dataTypes={self._data_types}',
-                       f'startDate={start_date_str}',
-                       f'endDate={end_date_str}',
+                       f'startDate={start_date}',
+                       f'endDate={end_date}',
                        'format=json'
                        )
                       )
@@ -566,25 +526,19 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         if data is None or len(data) == 0:
             raise ValueError("Failed to retrieve data from NOAA API")
         
-        # Convert date to datetime
+        # set index
         data['DATE'] = pd.to_datetime(data['DATE'])
-        
-        # Rename standard columns
-        name_mapping = {
-            'DATE': 'UTC',
-            'LATITUDE': 'lat',
-            'LONGITUDE': 'lon',
-            'ELEVATION': 'elevation'
-        }
-        data.rename(name_mapping, axis='columns', inplace=True)
-        
+        data.set_index('DATE', inplace=True)
+        data.index.name = 'UTC'
+        data.index = data.index.tz_localize('UTC')
+
         # Process data groups
         mandatory_groups = {
-            'WND': ['WindDir', 'QCWindDir', 'WindType', 'WindSpeed', 'QCWindSpeed'],
+            'WND': ['WindDirection', 'QCWindDirection', 'WindType', 'WindSpeed', 'QCWindSpeed'],
             'CIG': ['CloudHgt', 'QCCloudHgt', 'CeilingDetCode', 'CavokCode'],
             'VIS': ['Visibility', 'QCVisibility', 'VisibilityVarCode', 'QCVisVar'],
-            'TMP': ['Temperature', 'QCTemperature'],
-            'DEW': ['DewPointTemp','QCDewPoint'],
+            'TMP': ['DryBulbTemperature', 'QCTemperature'],
+            'DEW': ['DewPointTemperature','QCDewPoint'],
             'SLP': ['SeaLevelPressure','QCSeaLevelPressure'],
             'GA1': ['CloudOktas', 'GA2', 'GA3', 'GA4', 'GA5', 'GA6'],
             'AA2': ['AA1', 'RainCumulative', 'AA3', 'AA4']
@@ -596,8 +550,6 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 data[group_fields] = data[group_name].str.split(',', expand=True)
                 data.drop(group_name, axis='columns', inplace=True)
         
-        # Set DateTime Index
-        data.set_index('UTC', inplace=True)
         if 'STATION' in data.columns:
             data.drop('STATION', axis='columns', inplace=True)
         
@@ -608,35 +560,17 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             except:
                 pass
         
-        # Add timezone info to index
-        data.index = data.index.tz_localize('UTC')
-        
         # Convert units and fix dimensions
         data = self._fix_dimensions(data)
         
-        # Rename columns using NOAA field mappings
-        data.rename(columns=self._noaa_names, inplace=True)
-        
-        # If user wants LocalTime, convert the index
-        if timeZone == 'LocalTime':
-            # Get the station timezone
-            if self.station is not None and hasattr(self.station, 'timezone_name'):
-                station_tz = self.station.timezone_name
-            else:
-                station_tz = 'Australia/Sydney'  # Default timezone
-            
-            # Convert index to LocalTime
-            data['LocalTime'] = data.index.tz_convert(station_tz)
-            data = data.reset_index().set_index('LocalTime')
-            data.index.name = 'LocalTime'
-        
-        # Filter data to requested years
-        data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
-        
-        print(f"Data filtered successfully. Shape: {data.shape}")
-        print(f"Data index type: {type(data.index)}")
-        print(f"Data index timezone: {data.index.tz if hasattr(data.index, 'tz') else 'None'}")
-        print(f"Data columns: {data.columns.tolist()}")
+        # add LocalTime as a first column
+        if self.station is not None and hasattr(self.station, 'timezone_name'):
+            station_tz = self.station.timezone_name
+            timezone_local = pytz.timezone(station_tz)
+            data.insert(loc=0, column='LocalTime', value=data.index.tz_convert(timezone_local))
+        else:
+            print('Local Timezone could not be found')
+
         
         return data
     
@@ -657,17 +591,61 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Make a copy to avoid modifying the original
         df = data.copy()
         
+        # Define fields that need to be scaled by 0.1
+        scale_by_tenth = [
+            'WindSpeed',              # 0.1 m/s to m/s
+            'DryBulbTemperature',     # 0.1 °C to °C
+            'DewPointTemperature',    # 0.1 °C to °C
+            'SeaLevelPressure',       # 0.1 hPa to hPa
+            'RainCumulative'          # 0.1 mm to mm
+        ]
+        
+        # Apply scaling to all fields that exist in the dataframe
+        for field in scale_by_tenth:
+            if field in df.columns:
+                df[field] = round(df[field].astype(float) * 0.1, 2)
+        
+        # Set default values for fields that might be missing
+        default_nan_fields = [
+            'CloudOktas', 'RainCumulative', 'OC1_0', 'MW1_0', 
+            'MW1_1', 'AJ1_0', 'RH1_2', 'GA1_0'
+        ]
+        
+        for field in default_nan_fields:
+            if field not in df.columns:
+                df[field] = np.nan
+        
+        return df
+    
+    def _fix_dimensions1(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Fix dimensions and convert units for NOAA data.
+        
+        Parameters
+        ----------
+        data : pandas.DataFrame
+            Raw NOAA data.
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Processed data with fixed dimensions and units.
+        """
+        # Make a copy to avoid modifying the original
+        df = data.copy()
+        
+        print('speed before: ', df['WindSpeed'].head())
         # Convert wind speed from tenths of meters per second to km/h
         if 'WindSpeed' in df.columns:
             df['WindSpeed'] = df['WindSpeed'].astype(float) * 0.1 * 3.6  # 0.1 m/s to km/h
-        
+            print('speed after: ', df['WindSpeed'].head())
         # Convert temperature from tenths of degrees Celsius
-        if 'Temperature' in df.columns:
-            df['Temperature'] = df['Temperature'].astype(float) * 0.1
+        if 'DryBulbTemperature' in df.columns:
+            df['DryBulbTemperature'] = df['DryBulbTemperature'].astype(float) * 0.1
         
         # Convert dew point from tenths of degrees Celsius
-        if 'DewPointTemp' in df.columns:
-            df['DewPointTemp'] = df['DewPointTemp'].astype(float) * 0.1
+        if 'DewPointTemperature' in df.columns:
+            df['DewPointTemperature'] = df['DewPointTemperature'].astype(float) * 0.1
         
         # Convert sea level pressure from tenths of hPa
         if 'SeaLevelPressure' in df.columns:
@@ -711,7 +689,8 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
                 # Check if request was successful
                 if response.status_code == 200:
                     # Parse JSON data
-                    data = pd.read_json(response.text)
+                    from io import StringIO
+                    data = pd.read_json(StringIO(response.text))
                     
                     # Cache response
                     self._request_cache[cache_key] = data

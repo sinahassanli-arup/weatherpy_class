@@ -50,6 +50,44 @@ def compare_dataframes(df1, df2):
     if df1.shape != df2.shape:
         print(f"  Shape difference: {df1.shape} vs {df2.shape}")
     
+    # Check for NaN values
+    if not df1.isna().equals(df2.isna()):
+        print("  NaN value differences detected.")
+    
+    # Check for data type consistency
+    if not df1.dtypes.equals(df2.dtypes):
+        print("  Data type differences detected:")
+        # Instead of using compare() which requires identical labels,
+        # manually compare the dtypes for common columns
+        common_cols = set(df1.columns) & set(df2.columns)
+        dtype_diff = {}
+        
+        for col in common_cols:
+            if df1[col].dtype != df2[col].dtype:
+                dtype_diff[col] = {'legacy': df1[col].dtype, 'oop': df2[col].dtype}
+        
+        if dtype_diff:
+            print("  Common columns with different dtypes:")
+            for col, types in dtype_diff.items():
+                print(f"    {col}: {types['legacy']} vs {types['oop']}")
+        
+        # Show dtypes for columns that exist only in one DataFrame
+        only_df1_cols = set(df1.columns) - set(df2.columns)
+        if only_df1_cols:
+            print("  Columns only in legacy DataFrame:")
+            for col in sorted(only_df1_cols):
+                print(f"    {col}: {df1[col].dtype}")
+        
+        only_df2_cols = set(df2.columns) - set(df1.columns)
+        if only_df2_cols:
+            print("  Columns only in OOP DataFrame:")
+            for col in sorted(only_df2_cols):
+                print(f"    {col}: {df2[col].dtype}")
+    
+    # Check for index consistency
+    if not df1.index.equals(df2.index):
+        print("  Index differences detected.")
+    
     # For common columns, compare values
     common_cols = cols1 & cols2
     if common_cols:
@@ -96,7 +134,7 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
         if dataType == 'BOM':
             import weatherpy_legacy.data.stations as stations
             station_info = stations.station_info(stationID, printed=True)
-            
+            print('legacy timezone: ', timeZone)
             # Import data
             print("\n-----------------------------------------------------\n")
             # Use the main import_data function from weatherpy_legacy
@@ -116,6 +154,7 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
             # Import data
             print("\n-----------------------------------------------------\n")
             # Use the main import_data function from weatherpy_legacy
+            
             data_old, _, _ = wpl.import_data(
                 stationID,
                 dataType,
@@ -215,65 +254,12 @@ def compare_data_import(stationID, dataType, timeZone, yearStart, yearEnd, inter
     
     return data_old, data_class
 
-def list_available_stations(data_type=None):
-    """List available station IDs from the station database."""
-    try:
-        # Create a station database instance
-        from weatherpy.data.wd_stations import WeatherStationDatabase
-        
-        # Get all stations or filter by data type
-        if data_type:
-            station_db = WeatherStationDatabase(data_type)
-            stations = station_db.get_all_stations()
-        else:
-            # Get BOM stations by default
-            station_db = WeatherStationDatabase('BOM')
-            stations = station_db.get_all_stations()
-        
-        if stations:
-            station_ids = [station.id for station in stations]
-            print(f"\nAvailable station IDs ({len(station_ids)} total):")
-            # Print first 10 stations and indicate if there are more
-            print(', '.join(station_ids[:10]) + 
-                  (f"... and {len(station_ids)-10} more" if len(station_ids) > 10 else ""))
-        else:
-            print("No stations found in the database.")
-            
-        return station_ids
-    except Exception as e:
-        print(f"Error listing stations: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return []
-
-def print_data_paths():
-    """Print the paths where the legacy and OOP versions look for data."""
-    print("\n=== Data File Locations ===")
-    
-    # For legacy weatherpy
-    try:
-        import weatherpy_legacy as wpl
-        legacy_path = wpl.get_data_directory() if hasattr(wpl, 'get_data_directory') else "Unknown"
-        print(f"Legacy WeatherPy data directory: {legacy_path}")
-    except Exception as e:
-        print(f"Could not determine legacy data path: {str(e)}")
-    
-    # For OOP weatherpy
-    try:
-        import weatherpy as wp
-        oop_path = wp.get_data_directory() if hasattr(wp, 'get_data_directory') else "Unknown"
-        print(f"OOP WeatherPy data directory: {oop_path}")
-    except Exception as e:
-        print(f"Could not determine OOP data path: {str(e)}")
-    
-    print("=" * 30)
-
 # Example usage
 input_data_1 = {
     'stationID': '066037',  # Using a valid station ID from the database (WYNDHAM AERO)
     'dataType': 'BOM',
-    'timeZone': 'LocalTime',
-    'yearStart': 2010,
+    'timeZone': 'UTC',
+    'yearStart': 2018,
     'yearEnd': 2020,
     'interval': 60,
     'verbose': False  # Set to True for more detailed output
@@ -283,7 +269,7 @@ input_data_2 = {
     'stationID': '72509014739',
     'dataType': 'NOAA',
     'timeZone': 'LocalTime',
-    'yearStart': 2010,
+    'yearStart': 2018,
     'yearEnd': 2020,
     'interval': 60,
     'verbose': False  # Set to True for more detailed output
@@ -293,12 +279,6 @@ input_data_2 = {
 print('\n=== WeatherPy Import Comparison ===')
 print('=' * 30)
 
-# List available stations
-print("\nListing available BOM stations:")
-bom_stations = list_available_stations('BOM')
-
-# Print data file paths
-print_data_paths()
 
 # Run BOM import comparison
 print('\nRunning BOM import comparison...')
@@ -308,4 +288,61 @@ data_old_bom, data_class_bom = compare_data_import(**input_data_1)
 # print('\nRunning NOAA import comparison...')
 # data_old_noaa, data_class_noaa = compare_data_import(**input_data_2)
 
-print('\n=== Comparison Complete ===') 
+# print('\n=== Comparison Complete ===')
+
+# def test_import_bom_data():
+
+#     """Test case for importing BOM data."""
+#     input_data = {
+#         'stationID': '066037',
+#         'dataType': 'BOM',
+#         'timeZone': 'LocalTime',
+#         'yearStart': 2010,
+#         'yearEnd': 2020,
+#         'interval': 60
+#     }
+#     try:
+#         importer = BOMWeatherDataImporter(
+#             station_id=input_data['stationID'],
+#             time_zone=input_data['timeZone'],
+#             year_start=input_data['yearStart'],
+#             year_end=input_data['yearEnd'],
+#             interval=input_data['interval']
+#         )
+#         weather_data = importer.import_data()
+#         print("BOM data imported successfully.")
+#         # print(weather_data.data.head())
+#     except Exception as e:
+#         print(f"Error importing BOM data: {e}")
+
+
+# def test_import_noaa_data():
+#     """Test case for importing NOAA data."""
+#     input_data = {
+#         'stationID': '72509014739',
+#         'dataType': 'NOAA',
+#         'timeZone': 'LocalTime',
+#         'yearStart': 2010,
+#         'yearEnd': 2020,
+#         'interval': 60
+#     }
+#     try:
+#         importer = NOAAWeatherDataImporter(
+#             station_id=input_data['stationID'],
+#             time_zone=input_data['timeZone'],
+#             year_start=input_data['yearStart'],
+#             year_end=input_data['yearEnd'],
+#             interval=input_data['interval']
+#         )
+#         weather_data = importer.import_data()
+#         print("NOAA data imported successfully.")
+#         # print(weather_data.data.head())
+#     except Exception as e:
+#         print(f"Error importing NOAA data: {e}")
+
+
+# # Run test cases
+# print('\n=== Running Test Cases ===')
+# test_import_bom_data()
+# # test_import_noaa_data()
+# print('=== Test Cases Complete ===') 

@@ -1,4 +1,4 @@
-Station Code,Station Name,Country,State,Latitude,Longitude,Elevation,Start,End,Timezone UTC,Timezone Name,Source,Wind Direction,Wind Speed,Wind Gust,Sea Level Pressure,Dry Bulb Temperature,Wet Bulb Temperature,Relative Humidity,Rain,Rain Intensity,Cloud Oktas,Mean Correction Factors
+Station ID,Station Name,Country,State,Latitude,Longitude,Elevation,Start,End,Timezone UTC,Timezone Name,Source,Wind Direction,Wind Speed,Wind Gust,Sea Level Pressure,Dry Bulb Temperature,Wet Bulb Temperature,Relative Humidity,Rain,Rain Intensity,Cloud Oktas,Mean Correction Factors
 001006,WYNDHAM AERO,Australia,WA,-15.51,128.1503,3.8,1951,2023,UTC +08:00,Australia/Perth,BOM,True,True,True,True,True,True,True,True,True,False,
 001007,TROUGHTON ISLAND,Australia,WA,-13.7542,126.1485,6.0,1956,2023,UTC +08:00,Australia/Perth,BOM,True,True,True,True,True,True,True,True,True,False,
 001018,MOUNT ELIZABETH,Australia,WA,-16.4181,126.1025,546.0,1973,2023,UTC +08:00,Australia/Perth,BOM,True,True,False,True,True,True,True,False,False,True,
@@ -553,7 +553,7 @@ Station Code,Station Name,Country,State,Latitude,Longitude,Elevation,Start,End,T
 065103,FORBES AIRPORT AWS,Australia,NSW,-33.36283206,147.9205789,230.4,1995,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,True,True,True,True,True,True,False,
 065111,COWRA AIRPORT AWS,Australia,NSW,-33.83818277,148.6541639,300.4,2004,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,True,True,True,True,True,True,False,
 066022,FORT DENISON,Australia,NSW,-33.85506686,151.2253703,5.0,1989,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,False,False,False,False,True,True,False,
-066037,SYDNEY AIRPORT AMO,Australia,NSW,-33.96095,151.1818167,6.0,1929,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,True,True,True,True,True,True,True,"0.99,1.01,1.01,0.97,0.96,0.9,0.86,0.86,0.89,0.91,0.92,1.05,1.06,1.07,1.07,1.06"
+066037,SYDNEY AIRPORT AMO,Australia,NSW,-33.96095,151.1818167,6.0,1929,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,True,True,True,True,True,True,True,"0.96158, 0.97451, 0.973795, 0.941329, 0.932394, 0.872557, 0.825254, 0.829221, 0.862977, 0.837179, 0.87703, 1.007511, 1.027576, 1.032383, 0.954836, 0.908574"
 066043,KURNELL AWS,Australia,NSW,-34.00390195,151.2110953,4.0,2000,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,False,False,False,False,True,True,False,
 066051,LITTLE BAY (THE COAST GOLF CLUB),Australia,NSW,-33.98283763,151.2502862,22.0,1925,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,False,False,False,False,True,True,False,
 066059,TERREY HILLS AWS,Australia,NSW,-33.6910051,151.2254307,199.0,2004,2023,UTC +11:00,Australia/Sydney,BOM,True,True,True,False,True,True,True,True,True,False,
