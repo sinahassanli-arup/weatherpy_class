@@ -170,13 +170,13 @@ def _get_observation(start, end, station, datatypes):
         print(f"Failed ({response.reason}. Code {response.status_code})")
         return None
     
-def _import_data_historic(stationID, start_date_local, end_date_local, timezone_local, unified_obs_types=UNIFIED_OBS_TYPES):
+def _import_data_historic(station_id, start_date_local, end_date_local, timezone_local, unified_obs_types=UNIFIED_OBS_TYPES):
     """
     The main function for accessing historic data stored in AWS S3 bucket
     
     Parameters
     ----------
-    station : str
+    station_id : str
         The BOM station code. should be a string of 6 digits e.g. '066037'
 
     start_date_local : datetime
@@ -200,9 +200,9 @@ def _import_data_historic(stationID, start_date_local, end_date_local, timezone_
 
     df = pd.DataFrame()
     
-    weatherFileUrl = f'https://bomhistoric.s3.ap-southeast-2.amazonaws.com/hourly_data_{stationID}.csv.gz'
+    weather_file_url = f'https://bomhistoric.s3.ap-southeast-2.amazonaws.com/hourly_data_{station_id}.csv.gz'
 
-    df = pd.read_csv(weatherFileUrl, compression='gzip', parse_dates=['Local Time'])  
+    df = pd.read_csv(weather_file_url, compression='gzip', parse_dates=['Local Time'])  
     
     df['LocalTime'] = pd.to_datetime(df['Local Time'])
         
@@ -233,17 +233,17 @@ def _import_data_historic(stationID, start_date_local, end_date_local, timezone_
     
     return df
       
-def _import_data_new(stationID, start_date_UTC, end_date_UTC, timezone_local, obs_types=selected_obs_types, unified_obs_types=UNIFIED_OBS_TYPES):
+def _import_data_new(station_id, start_date_UTC, end_date_UTC, timezone_local, obs_types=selected_obs_types, unified_obs_types=UNIFIED_OBS_TYPES):
     
     # number of attempt to retrieve the data from repository
-    numAttempts = 10
+    num_attempts = 10
     i=0
     
-    while i < numAttempts:
+    while i < num_attempts:
         i += 1
-        print(f"\tAPI attempt {i}/{numAttempts} : ", end='\r')
+        print(f"\tAPI attempt {i}/{num_attempts} : ", end='\r')
         time_request = time.time()
-        url_address = _get_observation(start_date_UTC,end_date_UTC, str(int(stationID)), obs_types)         
+        url_address = _get_observation(start_date_UTC,end_date_UTC, str(int(station_id)), obs_types)         
         
         try: 
             df_new = pd.read_pickle(url_address)
@@ -255,7 +255,7 @@ def _import_data_new(stationID, start_date_UTC, end_date_UTC, timezone_local, ob
             pass
 
     if not 'df_new' in locals():
-        print(f'\tresource could not be fetched after {numAttempts} iterations\n')
+        print(f'\tresource could not be fetched after {num_attempts} iterations\n')
         print('--Exiting Script--')
         sys.exit()
         
@@ -351,17 +351,17 @@ def _bom_date_bounds(ID, yearStart, yearEnd, timeZone):
 
 
 # CONSOLIDATED BOM DATA (PRIOR AND AFTER 2017)    
-def bom_consolidate(stationID, timeZone = 'LocalTime', yearStart=None, yearEnd=None):
+def bom_consolidate(station_id, time_zone = 'LocalTime', yearStart=None, yearEnd=None):
     '''
     The primary function for creating a dataframe of BOM data
     This function creates accesses lve and historic data and joins them
 
     Parameters
     ----------
-    stationID : str
+    station_id : str
         A weather station ID used to select the station for data retrieval
     
-    timeZone : str
+    time_zone : str
         The desired timezone, either "LocalTime" or "UTC"
 
     yearStart : int
@@ -378,7 +378,7 @@ def bom_consolidate(stationID, timeZone = 'LocalTime', yearStart=None, yearEnd=N
     #%% Get start and end date for historic and new data
    
     # get the timezone of the weather station
-    timezone_local = pytz.timezone(station_info(stationID, printed=False)['Timezone Name'])
+    timezone_local = pytz.timezone(station_info(station_id, printed=False)['Timezone Name'])
 
     # Creates the start and end datetime objects
     start_date_local = timezone_local.localize(datetime.strptime(str(yearStart - 1)+' 12 25 00:00','%Y %m %d %H:%M'))
@@ -407,11 +407,11 @@ def bom_consolidate(stationID, timeZone = 'LocalTime', yearStart=None, yearEnd=N
     # Import Historic data (pre 2017)
     df_historic = pd.DataFrame()
     if historic_data_present:
-        df_historic = _import_data_historic(stationID, start_date_local, end_date_old_data, timezone_local, UNIFIED_OBS_TYPES)
+        df_historic = _import_data_historic(station_id, start_date_local, end_date_old_data, timezone_local, UNIFIED_OBS_TYPES)
     # Import new data (post 2017)
     df_new = pd.DataFrame()
     if new_data_present:
-        df_new = _import_data_new(stationID, start_date_UTC_new_data, end_date_UTC, timezone_local, selected_obs_types, UNIFIED_OBS_TYPES)
+        df_new = _import_data_new(station_id, start_date_UTC_new_data, end_date_UTC, timezone_local, selected_obs_types, UNIFIED_OBS_TYPES)
 
     #%% Joining data
     # reduce the columsn to the unified columns if they are available
@@ -436,13 +436,13 @@ def bom_consolidate(stationID, timeZone = 'LocalTime', yearStart=None, yearEnd=N
 
 
 # Function to get 1/10/60min BOM historic weather data from 2000 to 2023
-def _import_bomhistoric(stationID, interval, timeZone, yearStart, yearEnd):
+def _import_bomhistoric(station_id, interval, time_zone, yearStart, yearEnd):
     
     # api url
     url = "https://rr0yh3ttf5.execute-api.ap-southeast-2.amazonaws.com/Prod/v1/bomhistoric"
 
     # preparing POST argument for request
-    stationFile = f"{stationID}.zip" if interval==1 else f"{stationID}-{interval}minute.zip"
+    stationFile = f"{station_id}.zip" if interval==1 else f"{station_id}-{interval}minute.zip"
 
     body = {
     "bucket": f"bomhistoric-{interval}minute",
@@ -472,7 +472,7 @@ def _import_bomhistoric(stationID, interval, timeZone, yearStart, yearEnd):
         print("API request failed")
         
     # Switch UTC and Local time datetime index if needed 
-    if timeZone != df.index.name:
+    if time_zone != df.index.name:
         df = df.reset_index()
         df = df.set_index(df.columns[1])
     
