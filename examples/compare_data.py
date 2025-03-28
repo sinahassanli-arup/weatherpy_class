@@ -271,7 +271,7 @@ input_data_2 = {
     'timeZone': 'LocalTime',
     'yearStart': 2018,
     'yearEnd': 2020,
-    'interval': 60,
+    'interval': 30,
     'verbose': False  # Set to True for more detailed output
 }
 
@@ -285,8 +285,8 @@ print('\nRunning BOM import comparison...')
 data_old_bom, data_class_bom = compare_data_import(**input_data_1)
 
 # Uncomment to run NOAA import comparison
-# print('\nRunning NOAA import comparison...')
-# data_old_noaa, data_class_noaa = compare_data_import(**input_data_2)
+print('\nRunning NOAA import comparison...')
+data_old_noaa, data_class_noaa = compare_data_import(**input_data_2)
 
 # print('\n=== Comparison Complete ===')
 

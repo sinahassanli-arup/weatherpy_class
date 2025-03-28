@@ -8,28 +8,29 @@ import logging
 from typing import Dict, List, Optional, Union, Tuple, Any
 from .wd_base import WeatherData
 
-class WeatherDataCleaner(WeatherData):
+class WeatherDataCleaner:
     """Base class for cleaning weather data."""
     
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, weather_data: WeatherData):
         """
         Initialize with weather data.
         
         Parameters
         ----------
-        data : pd.DataFrame
-            Weather data DataFrame
+        weather_data : WeatherData
+            Weather data object to clean
         """
-        super().__init__(data)
+        self.weather_data = weather_data
+        self.data = weather_data.data.copy()  # Work on a copy of the data
         
-    def clean_data(self) -> 'WeatherDataCleaner':
+    def clean_data(self) -> WeatherData:
         """
         Clean data using all available methods.
         
         Returns
         -------
-        WeatherDataCleaner
-            Self for method chaining
+        WeatherData
+            cleaned weather data
         """
         raise NotImplementedError("Subclasses must implement clean_data")
         
@@ -59,6 +60,14 @@ class WeatherDataCleaner(WeatherData):
             logging.info(f"Removed {mask.sum()} rows with invalid values in columns: {columns}")
         
         self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner",
+            operation_method="clean_invalid",
+            inputs={"columns": columns},
+            outputs={"dataChanged": bool(~self.data.equals(self.weather_data.data)),
+                    "shape": self.data.shape}
+        )
         return self
         
     def clean_threshold(self, thresholds: Dict[str, Tuple[float, float]]) -> 'WeatherDataCleaner':
@@ -89,6 +98,15 @@ class WeatherDataCleaner(WeatherData):
             logging.info(f"Removed {rows_to_remove.sum()} rows with values outside thresholds")
         
         self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner",
+            operation_method="clean_threshold",
+            inputs={"thresholds": thresholds},
+            outputs={"removed_count": rows_to_remove.sum(), 
+                    "dataChanged": bool(~self.data.equals(self.weather_data.data)),
+                    "shape": self.data.shape}
+        )
         return self
         
     def clean_outliers(self, columns: List[str], method: str = 'zscore', threshold: float = 3) -> 'WeatherDataCleaner':
@@ -131,6 +149,15 @@ class WeatherDataCleaner(WeatherData):
             logging.info(f"Removed {rows_to_remove.sum()} rows with outlier values")
         
         self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner", 
+            operation_method="clean_outliers",
+            inputs={"columns": columns, "method": method, "threshold": threshold},
+            outputs={"removed_count": rows_to_remove.sum(), 
+                    "dataChanged": bool(~self.data.equals(self.weather_data.data)),
+                    "shape": self.data.shape}
+        )
         return self
         
     def clean_duplicates(self) -> 'WeatherDataCleaner':
@@ -142,28 +169,19 @@ class WeatherDataCleaner(WeatherData):
         WeatherDataCleaner
             Self for method chaining
         """
+        original_count = len(self.data)
         self.data = self.data.drop_duplicates()
-        return self
+        removed_count = original_count - len(self.data)
         
-    def clean_missing(self, threshold: float = 0.5) -> 'WeatherDataCleaner':
-        """
-        Clean columns with too many missing values.
-        
-        Parameters
-        ----------
-        threshold : float, optional
-            Missing value threshold, by default 0.5
-            
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        missing_ratio = data_copy.isnull().sum() / len(data_copy)
-        cols_to_drop = missing_ratio[missing_ratio > threshold].index
-        data_copy = data_copy.drop(columns=cols_to_drop)
-        self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner",
+            operation_method="clean_duplicates",
+            inputs={},
+            outputs={"removed_count": removed_count, 
+                    "dataChanged": bool(original_count != len(self.data)),
+                    "shape": self.data.shape}
+        )
         return self
         
     def interpolate_missing(self, method: str = 'linear') -> 'WeatherDataCleaner':
@@ -181,8 +199,20 @@ class WeatherDataCleaner(WeatherData):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        na_count_before = data_copy.isna().sum().sum()
         data_copy = data_copy.interpolate(method=method)
+        na_count_after = data_copy.isna().sum().sum()
         self.data = data_copy
+        
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner",
+            operation_method="interpolate_missing",
+            inputs={"method": method},
+            outputs={"filled_count": na_count_before - na_count_after, 
+                     "dataChanged": bool(~self.data.equals(self.weather_data.data)),
+                     "shape": self.data.shape}
+        )
         return self
         
     def fill_missing(self, value: Any = 0) -> 'WeatherDataCleaner':
@@ -200,51 +230,119 @@ class WeatherDataCleaner(WeatherData):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        na_count_before = data_copy.isna().sum().sum()
         data_copy = data_copy.fillna(value)
+        na_count_after = data_copy.isna().sum().sum()
         self.data = data_copy
+        
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="Cleaner",
+            operation_method="fill_missing",
+            inputs={"value": value},
+            outputs={"filled_count": na_count_before - na_count_after, 
+                     "dataChanged": bool(~self.data.equals(self.weather_data.data)),
+                     "shape": self.data.shape}
+        )
         return self
+    
+    def _update_weather_data(self, inplace: bool = True) -> WeatherData:
+        """
+        Update the WeatherData object with the cleaned data.
+        
+        Parameters
+        ----------
+        inplace : bool, optional
+            If True, modify the original WeatherData object. Otherwise, create a new one.
+            
+        Returns
+        -------
+        WeatherData
+            Updated WeatherData object
+        """
+        if inplace:
+            # Update the existing WeatherData object's data
+            self.weather_data.data = self.data
+            return self.weather_data
+        else:
+            # Create a new WeatherData object with the cleaned data
+            new_weather_data = WeatherData(
+                data=self.data.copy(),
+                station=self.weather_data.station,
+                data_type=self.weather_data.data_type,
+                interval=self.weather_data.interval
+            )
+            # Copy operations log
+            new_weather_data._operations_log = self.weather_data.operations_log.copy()
+            # Add the cleaning operations that were performed
+            for op in self.weather_data.operations_log:
+                if op not in new_weather_data._operations_log:
+                    new_weather_data._operations_log.append(op)
+            return new_weather_data
         
 class BOMDataCleaner(WeatherDataCleaner):
     """Class for cleaning BOM weather data."""
     
-    def clean_data(self) -> 'WeatherDataCleaner':
+    def clean_data(
+        self,
+        clean_invalid: bool = True,
+        invalid_columns: Optional[List[str]] = None,
+        clean_threshold: bool = True,
+        thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
+        clean_duplicates: bool = True,
+        interpolate_missing: bool = False,
+        inplace: bool = True
+    ) -> WeatherData:
         """
-        Clean BOM data using all available methods.
+        Clean BOM data using specified methods.
         
+        Parameters
+        ----------
+        clean_invalid : bool, optional
+            Whether to clean invalid values, by default True
+        invalid_columns : List[str], optional
+            Columns to clean for invalid values, by default ['WindSpeed', 'WindDirection']
+        clean_threshold : bool, optional
+            Whether to clean values outside thresholds, by default includes common weather variables
+        thresholds : Dict[str, Tuple[float, float]], optional
+            Thresholds for cleaning, by default includes common weather variables
+        clean_duplicates : bool, optional
+            Whether to clean duplicate rows, by default True
+        interpolate_missing : bool, optional
+            Whether to interpolate remaining missing values, by default False
+        inplace : bool, optional
+            If True, modify the original WeatherData object. Otherwise, create a new one.
+            
         Returns
         -------
-        WeatherDataCleaner
-            Self for method chaining
+        WeatherData
+            Cleaned weather data object
         """
-        # Fix wind directions between 0° and 5° to 360°
-        self.fix_wind_direction_0_to_5()
+        # Set default values if None
+        if invalid_columns is None:
+            invalid_columns = ['WindSpeed', 'WindDirection']
+            
+        if thresholds is None:
+            thresholds = {
+                'WindSpeed': (0, 50),
+                'DryBulbTemperature': (-25, 55),
+                'RelativeHumidity': (0, 100),
+                'Pressure': (900, 1100)
+            }
+            
+        if clean_invalid:
+            self.clean_invalid(invalid_columns)
         
-        # Round wind direction to nearest 10°
-        self.round_wind_direction()
+        if clean_threshold:
+            self.clean_threshold(thresholds)
         
-        # Set wind direction to 0° for calm conditions
-        self.zero_calm_direction()
+        if clean_duplicates:
+            self.clean_duplicates()
+    
+        if interpolate_missing:
+            self.interpolate_missing()
         
-        # Clean invalid values
-        self.clean_invalid(['WindSpeed', 'WindDirection'])
-        
-        # Clean values outside thresholds
-        thresholds = {
-            'WindSpeed': (0, 50),
-            'PrePostRatio': (5, 30)
-        }
-        self.clean_threshold(thresholds)
-        
-        # Clean duplicates
-        self.clean_duplicates()
-        
-        # Clean missing values
-        self.clean_missing()
-        
-        # Interpolate remaining missing values
-        self.interpolate_missing()
-        
-        return self
+        return self._update_weather_data(inplace=inplace)
         
     def clean_calms(self) -> 'WeatherDataCleaner':
         """
@@ -256,12 +354,24 @@ class BOMDataCleaner(WeatherDataCleaner):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        modified_count = 0
         if 'WindSpeed' in data_copy.columns:
             calm_mask = data_copy['WindSpeed'] < 0.5
+            modified_count = calm_mask.sum()
             data_copy.loc[calm_mask, 'WindSpeed'] = 0
             if 'WindDirection' in data_copy.columns:
                 data_copy.loc[calm_mask, 'WindDirection'] = np.nan
         self.data = data_copy
+        
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="BOMCleaner",
+            operation_method="clean_calms",
+            inputs={},
+            outputs={"modified_count": modified_count, 
+                     "dataChanged": bool(modified_count > 0),
+                     "shape": self.data.shape}
+        )
         return self
         
     def clean_off_clock(self) -> 'WeatherDataCleaner':
@@ -274,124 +384,111 @@ class BOMDataCleaner(WeatherDataCleaner):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        modified_count = 0
         if 'WindDirection' in data_copy.columns:
             # Round to nearest 10 degrees
+            original_values = data_copy['WindDirection'].copy()
             data_copy['WindDirection'] = data_copy['WindDirection'].round(-1)
             # Set values outside 0-360 to NaN
             mask = (data_copy['WindDirection'] < 0) | (data_copy['WindDirection'] > 360)
             data_copy.loc[mask, 'WindDirection'] = np.nan
+            # Count modified values
+            modified_count = (original_values != data_copy['WindDirection']).sum()
         self.data = data_copy
-        return self
         
-    def round_wind_direction(self) -> 'WeatherDataCleaner':
-        """
-        Round wind directions to nearest 10 degrees.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindDirection' in data_copy.columns:
-            data_copy['WindDirection'] = data_copy['WindDirection'].round(-1)
-            # Handle special case of 0 degrees
-            data_copy.loc[data_copy['WindDirection'] == 0, 'WindDirection'] = 360
-        self.data = data_copy
-        return self
-        
-    def fix_wind_direction_0_to_5(self) -> 'WeatherDataCleaner':
-        """
-        Fix wind directions between 0° and 5° to 360°.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindDirection' in data_copy.columns:
-            mask = (data_copy['WindDirection'] >= 0) & (data_copy['WindDirection'] <= 5)
-            data_copy.loc[mask, 'WindDirection'] = 360
-        self.data = data_copy
-        return self
-        
-    def adjust_low_wind_direction(self) -> 'WeatherDataCleaner':
-        """
-        Adjust wind directions for low wind speeds.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindSpeed' in data_copy.columns and 'WindDirection' in data_copy.columns:
-            low_wind_mask = data_copy['WindSpeed'] < 0.5
-            data_copy.loc[low_wind_mask, 'WindDirection'] = np.nan
-        self.data = data_copy
-        return self
-        
-    def zero_calm_direction(self) -> 'WeatherDataCleaner':
-        """
-        Set wind direction to zero for calm conditions.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindSpeed' in data_copy.columns and 'WindDirection' in data_copy.columns:
-            calm_mask = data_copy['WindSpeed'] == 0
-            data_copy.loc[calm_mask, 'WindDirection'] = 0
-        self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="BOMCleaner",
+            operation_method="clean_off_clock",
+            inputs={},
+            outputs={"modified_count": modified_count,
+                     "dataChanged": bool(modified_count > 0),
+                     "shape": self.data.shape}
+        )
         return self
         
 class NOAADataCleaner(WeatherDataCleaner):
     """Class for cleaning NOAA weather data."""
     
-    def clean_data(self) -> 'WeatherDataCleaner':
+    def clean_data(
+        self,
+        clean_invalid: bool = True,
+        invalid_columns: Optional[List[str]] = None,
+        clean_threshold: bool = True,
+        thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
+        clean_duplicates: bool = True,
+        interpolate_missing: bool = False,
+        clean_ranked_rows: bool = True,
+        clean_VC_filter: bool = True,
+        clean_storms: bool = True,
+        inplace: bool = True
+    ) -> WeatherData:
         """
-        Clean NOAA data using all available methods.
+        Clean NOAA data using specified methods.
         
+        Parameters
+        ----------
+        clean_invalid : bool, optional
+            Whether to clean invalid values, by default True
+        invalid_columns : List[str], optional
+            Columns to clean for invalid values, by default ['WindSpeed', 'WindDirection']
+        clean_threshold : bool, optional
+            Whether to clean values outside thresholds, by default True
+        thresholds : Dict[str, Tuple[float, float]], optional
+            Thresholds for cleaning, by default includes common weather variables
+        clean_duplicates : bool, optional
+            Whether to clean duplicate rows, by default True
+        interpolate_missing : bool, optional
+            Whether to interpolate remaining missing values, by default False
+        clean_ranked_rows : bool, optional
+            Whether to clean ranked rows, by default True
+        clean_VC_filter : bool, optional
+            Whether to clean variable/changeable weather codes, by default True
+        clean_storms : bool, optional
+            Whether to clean storm data, by default True
+        inplace : bool, optional
+            If True, modify the original WeatherData object. Otherwise, create a new one.
+            
         Returns
         -------
-        WeatherDataCleaner
-            Self for method chaining
+        WeatherData
+            Cleaned weather data object
         """
-        # Clean invalid values
-        self.clean_invalid(['WindSpeed', 'WindDirection'])
+        # Set default values if None
+        if invalid_columns is None:
+            invalid_columns = ['WindSpeed', 'WindDirection']
+            
+        if thresholds is None:
+            thresholds = {
+                'WindSpeed': (0, 50),
+                'DryBulbTemperature': (-25, 55),
+                'RelativeHumidity': (0, 100),
+                'Pressure': (900, 1100)
+            }
+            
+        if clean_invalid:
+            self.clean_invalid(invalid_columns)
         
-        # Clean values outside thresholds
-        thresholds = {
-            'WindSpeed': (0, 50),
-            'PrePostRatio': (5, 30)
-        }
-        self.clean_threshold(thresholds)
+        if clean_threshold:
+            self.clean_threshold(thresholds)
         
-        # Clean ranked rows
-        self.clean_ranked_rows()
+        if clean_ranked_rows:
+            self.clean_ranked_rows()
         
-        # Clean VC filter
-        self.clean_VC_filter()
+        if clean_VC_filter:
+            self.clean_VC_filter()
         
-        # Clean wind direction
-        self.clean_direction()
+        if clean_storms:
+            self.clean_storms()
         
-        # Clean storm data
-        self.clean_storms()
+        if clean_duplicates:
+            self.clean_duplicates()
         
-        # Clean duplicates
-        self.clean_duplicates()
+        if interpolate_missing:
+            self.interpolate_missing()
         
-        # Clean missing values
-        self.clean_missing()
-        
-        # Interpolate remaining missing values
-        self.interpolate_missing()
-        
-        return self
+        # Update and return the WeatherData object
+        return self._update_weather_data(inplace=inplace)
         
     def clean_ranked_rows(self) -> 'WeatherDataCleaner':
         """
@@ -403,9 +500,21 @@ class NOAADataCleaner(WeatherDataCleaner):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        original_count = len(data_copy)
         if 'Rank' in data_copy.columns:
             data_copy = data_copy[data_copy['Rank'] == 1]
         self.data = data_copy
+        removed_count = original_count - len(data_copy)
+        
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="NOAACleaner",
+            operation_method="clean_ranked_rows",
+            inputs={},
+            outputs={"removed_count": removed_count,
+                    "dataChanged": bool(removed_count > 0),
+                    "shape": self.data.shape}
+        )
         return self
         
     def clean_VC_filter(self) -> 'WeatherDataCleaner':
@@ -418,34 +527,22 @@ class NOAADataCleaner(WeatherDataCleaner):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        modified_count = 0
         if 'WeatherCode' in data_copy.columns:
             vc_mask = data_copy['WeatherCode'].str.contains('VC', na=False)
+            modified_count = vc_mask.sum()
             data_copy.loc[vc_mask, 'WeatherCode'] = np.nan
         self.data = data_copy
-        return self
         
-    def clean_direction(self) -> 'WeatherDataCleaner':
-        """
-        Clean wind direction data.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindDirection' in data_copy.columns:
-            # Convert VRB to NaN
-            vrb_mask = data_copy['WindDirection'].astype(str).str.contains('VRB', na=False)
-            data_copy.loc[vrb_mask, 'WindDirection'] = np.nan
-            
-            # Convert to numeric
-            data_copy['WindDirection'] = pd.to_numeric(data_copy['WindDirection'], errors='coerce')
-            
-            # Set values outside 0-360 to NaN
-            mask = (data_copy['WindDirection'] < 0) | (data_copy['WindDirection'] > 360)
-            data_copy.loc[mask, 'WindDirection'] = np.nan
-        self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="NOAACleaner",
+            operation_method="clean_VC_filter",
+            inputs={},
+            outputs={"modified_count": modified_count,
+                    "dataChanged": bool(modified_count > 0),
+                    "shape": self.data.shape}
+        )
         return self
         
     def clean_storms(self) -> 'WeatherDataCleaner':
@@ -458,25 +555,21 @@ class NOAADataCleaner(WeatherDataCleaner):
             Self for method chaining
         """
         data_copy = self.data.copy()
+        modified_count = 0
         if 'WeatherCode' in data_copy.columns:
             storm_codes = ['TS', 'SQ', 'FC']
             storm_mask = data_copy['WeatherCode'].str.contains('|'.join(storm_codes), na=False)
+            modified_count = storm_mask.sum()
             data_copy.loc[storm_mask, ['WindSpeed', 'WindDirection']] = np.nan
         self.data = data_copy
-        return self
         
-    def zero_calm_direction(self) -> 'WeatherDataCleaner':
-        """
-        Set wind direction to zero for calm conditions.
-        
-        Returns
-        -------
-        WeatherDataCleaner
-            Self for method chaining
-        """
-        data_copy = self.data.copy()
-        if 'WindSpeed' in data_copy.columns and 'WindDirection' in data_copy.columns:
-            calm_mask = data_copy['WindSpeed'] == 0
-            data_copy.loc[calm_mask, 'WindDirection'] = 0
-        self.data = data_copy
+        # Log the operation with new format
+        self.weather_data._log_operation(
+            operation_class="NOAACleaner",
+            operation_method="clean_storms",
+            inputs={"storm_codes": ['TS', 'SQ', 'FC']},
+            outputs={"modified_count": modified_count,
+                    "dataChanged": bool(modified_count > 0),
+                    "shape": self.data.shape}
+        )
         return self 

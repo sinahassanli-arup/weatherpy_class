@@ -28,6 +28,7 @@ class WeatherDataInferer:
         """
         self.data = data.copy()
         self.station_altitude = station_altitude
+        self.weather_data = None  # This will be set when used with a WeatherData object
         psychrolib.SetUnitSystem(psychrolib.SI)
         
     @staticmethod
@@ -204,6 +205,16 @@ class WeatherDataInferer:
         stn_lvl_pres[stn_lvl_pres > 110000] = 101000
         self.data['StationLevelPressure'] = stn_lvl_pres / 100
         
+        # Log the operation if weather_data is available
+        if hasattr(self, 'weather_data') and self.weather_data is not None:
+            self.weather_data._log_operation(
+                operation_class="Inferer",
+                operation_method="infer_station_pressure",
+                inputs={"station_altitude": self.station_altitude},
+                outputs={"added_columns": ["StationLevelPressure"],
+                         "shape": self.data.shape}
+            )
+        
         return self.data
         
     def infer_psychro_properties(self) -> pd.DataFrame:
@@ -231,25 +242,44 @@ class WeatherDataInferer:
         get_rh_from_dp = np.vectorize(self.GetRelHumFromTDewPoint)
         get_dp_from_rh = np.vectorize(self.GetTDewPointFromRelHum)
         
+        # Track added columns for logging
+        added_columns = []
+        
         # Case 1: Both RH and DP available
         if np.any(rh) and np.any(tdp):
             logging.info('\tCalculating WB Temperature from Relative Humidity and DP Temperature')
             self.data['WetBulbTemperature'] = get_wb_from_rh_dp(tdb, rh, tdp, stn_lvl_pres)
+            added_columns.append('WetBulbTemperature')
             
         # Case 2: Only DP available
         elif not np.any(rh) and np.any(tdp):
             logging.info('\tCalculating WB Temperature from DP Temperature')
             self.data['WetBulbTemperature'] = get_wb_from_dp(tdb, tdp, stn_lvl_pres)
             self.data['RelativeHumidity'] = get_rh_from_dp(tdb, tdp)
+            added_columns.extend(['WetBulbTemperature', 'RelativeHumidity'])
             
         # Case 3: Only RH available
         elif np.any(rh) and not np.any(tdp):
             logging.info('\tCalculating WB Temperature from Relative Humidity')
             self.data['WetBulbTemperature'] = get_wb_from_rh(tdb, rh, stn_lvl_pres)
             self.data['DewPointTemperature'] = get_dp_from_rh(tdb, rh)
+            added_columns.extend(['WetBulbTemperature', 'DewPointTemperature'])
             
         else:
             logging.info('\tNo data could be inferred')
+            
+        # Log the operation if weather_data is available
+        if hasattr(self, 'weather_data') and self.weather_data is not None and added_columns:
+            self.weather_data._log_operation(
+                operation_class="Inferer",
+                operation_method="infer_psychro_properties",
+                inputs={
+                    "has_relative_humidity": np.any(rh),
+                    "has_dew_point": np.any(tdp)
+                },
+                outputs={"added_columns": added_columns,
+                         "shape": self.data.shape}
+            )
             
         return self.data
         
@@ -266,6 +296,19 @@ class WeatherDataInferer:
             - DewPointTemperature (if inferred)
             - RelativeHumidity (if inferred)
         """
+        initial_columns = set(self.data.columns)
         self.infer_station_pressure()
         self.infer_psychro_properties()
+        
+        # Log the operation if weather_data is available
+        if hasattr(self, 'weather_data') and self.weather_data is not None:
+            added_columns = list(set(self.data.columns) - initial_columns)
+            self.weather_data._log_operation(
+                operation_class="Inferer",
+                operation_method="infer_all",
+                inputs={"station_altitude": self.station_altitude},
+                outputs={"added_columns": added_columns,
+                         "shape": self.data.shape}
+            )
+        
         return self.data 

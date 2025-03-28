@@ -1,7 +1,0 @@
-[33mcommit d33ab020ef76b5dcfbdcdf4803d8c3a20335f6d6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m
-Author: WeatherPy Developer <weatherpy@example.com>
-Date:   Mon Mar 10 03:12:58 2025 +0000
-
-    Refactor weather station database
-
-examples/test_stations.py

@@ -68,7 +68,7 @@ class WeatherDataImporter(ABC):
         
         # Validate years
         self._year_start, self._year_end = self._validate_years()
-        
+    
     @property
     def station_id(self) -> str:
         """Get the station ID."""
@@ -136,7 +136,7 @@ class WeatherDataImporter(ABC):
         # Validate years
         if self._year_start is not None and self._year_end is not None:
             if self._year_start > self._year_end:
-                raise ValueError("yearStart must be less than or equal to yearEnd")
+                raise ValueError("year_start must be less than or equal to year_end")
         
         # Get station start and end years if station is available
         if self.station is not None:
@@ -235,19 +235,19 @@ class WeatherDataImporter(ABC):
             print(f"Error saving cache file: {e}")
     
     @abstractmethod
-    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, year_start: int, year_end: int, interval: int, time_zone: str) -> pd.DataFrame:
         """
         Import data from the source.
         
         Parameters
         ----------
-        yearStart : int
+        year_start : int
             Start year.
-        yearEnd : int
+        year_end : int
             End year.
         interval : int
             Interval in minutes.
-        timeZone : str
+        time_zone : str
             Time zone.
         
         Returns
@@ -257,19 +257,19 @@ class WeatherDataImporter(ABC):
         """
         pass
 
-    def import_data(self, yearStart=None, yearEnd=None, interval=None, timeZone=None, save_raw=None) -> WeatherData:
+    def import_data(self, year_start=None, year_end=None, interval=None, time_zone=None, save_raw=None) -> WeatherData:
         """
         Import data from the source.
         
         Parameters
         ----------
-        yearStart : int, optional
+        year_start : int, optional
             Start year. If None, uses the value from initialization.
-        yearEnd : int, optional
+        year_end : int, optional
             End year. If None, uses the value from initialization.
         interval : int, optional
             Interval in minutes. If None, uses the value from initialization.
-        timeZone : str, optional
+        time_zone : str, optional
             Time zone. If None, uses the value from initialization.
         save_raw : bool, optional
             Save raw data. If None, uses the value from initialization.
@@ -280,10 +280,10 @@ class WeatherDataImporter(ABC):
             Imported weather data object
         """
         # Use instance variables if parameters are not provided
-        yearStart = yearStart if yearStart is not None else self._year_start
-        yearEnd = yearEnd if yearEnd is not None else self._year_end
+        year_start = year_start if year_start is not None else self._year_start
+        year_end = year_end if year_end is not None else self._year_end
         interval = interval if interval is not None else self._interval
-        timeZone = timeZone if timeZone is not None else self._time_zone
+        time_zone = time_zone if time_zone is not None else self._time_zone
         save_raw = save_raw if save_raw is not None else self._save_raw
         
         # Try to read from cache first
@@ -293,14 +293,14 @@ class WeatherDataImporter(ABC):
             return WeatherData(data, self.station)
         
         # Import data from source
-        data = self._import_from_server(yearStart, yearEnd, interval, timeZone)
+        data = self._import_from_server(year_start, year_end, interval, time_zone)
         
-        # If user wants timezone that is different from the default timeZone, swap them
-        if timeZone != data.index.name:
+        # If user wants timezone that is different from the default time_zone, swap them
+        if time_zone != data.index.name:
             data.reset_index(inplace=True)
             data.set_index(data.columns[1], inplace=True, drop=True)
             
-        data = data[(data.index.year >= yearStart) & (data.index.year <= yearEnd)]
+        data = data[(data.index.year >= year_start) & (data.index.year <= year_end)]
         
         # Save to cache if requested
         if save_raw:
@@ -341,19 +341,19 @@ class BOMWeatherDataImporter(WeatherDataImporter):
         if len(station_id) != 6:
             raise ValueError(f"BOM station ID must be 6 digits, got: {station_id}")
     
-    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, year_start: int, year_end: int, interval: int, time_zone: str) -> pd.DataFrame:
         """
         Import data from BOM source.
         
         Parameters
         ----------
-        yearStart : int
+        year_start : int
             Start year.
-        yearEnd : int
+        year_end : int
             End year.
         interval : int
             Interval in minutes.
-        timeZone : str
+        time_zone : str
             Time zone.
         
         Returns
@@ -362,7 +362,7 @@ class BOMWeatherDataImporter(WeatherDataImporter):
             Imported data.
         """
         print(f"Importing BOM data for station {self._station_id}")
-        
+
         try:
             # Direct implementation of BOM data import
             # API URL
@@ -412,20 +412,7 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
     
     # NOAA API endpoint - using the legacy endpoint that doesn't require a token
     API_ENDPOINT = "https://www.ncei.noaa.gov/access/services/data/v1?"
-    
-    # NOAA field names mapping to our standardized names
-    _noaa_names = {
-        'DryBulbTemperature': 'air_temperature',
-        'DewPointTemperature': 'dew_point',
-        'SeaLevelPressure': 'pres',
-        'RainCumulative': 'rainfall',
-        'CloudOktas': 'cloud_oktas',
-        'Visibility': 'visibility',
-        'WindDirection': 'wind_dir_deg',
-        'WindSpeed': 'wind_spd_kmh',
-        'WindGust': 'wind_gust_kmh'
-    }
-    
+
     # NOAA data types to request
     _data_types = 'WND,CIG,VIS,TMP,DEW,SLP,LONGITUDE,LATITUDE,ELEVATION,GA1,AA2'
     
@@ -453,16 +440,16 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         # Initialize request cache
         self._request_cache = {}
     
-    def _get_date_bounds(self, yearStart: int, yearEnd: int) -> Tuple[datetime, datetime]:
+    def _get_date_bounds(self, year_start: int, year_end: int) -> Tuple[datetime, datetime]:
         """
-        Get UTC date bounds for NOAA API call. It will get 5 extra days before yearStart and 5 after the yearEnd.
+        Get UTC date bounds for NOAA API call. It will get 5 extra days before year_start and 5 after the year_end.
         The data should be clipped after import
         
         Parameters
         ----------
-        yearStart : int
+        year_start : int
             Start year.
-        yearEnd : int
+        year_end : int
             End year.
             
         Returns
@@ -471,27 +458,27 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             Start and end UTC datetime bounds (with extra days).
         """
         # Creates the upper and lower date bounds for the import
-        start_date_UTC = pytz.UTC.localize(datetime.strptime(str(yearStart - 1)+' 12 25 00:00','%Y %m %d %H:%M'))
-        end_date_UTC = pytz.UTC.localize(datetime.strptime(str(yearEnd + 1)+' 01 05 23:59','%Y %m %d %H:%M'))
+        start_date_UTC = pytz.UTC.localize(datetime.strptime(str(year_start - 1)+' 12 25 00:00','%Y %m %d %H:%M'))
+        end_date_UTC = pytz.UTC.localize(datetime.strptime(str(year_end + 1)+' 01 05 23:59','%Y %m %d %H:%M'))
         
         start_date_str = start_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         end_date_str = end_date_UTC.strftime('%Y-%m-%dT%H:%M:00')
         
         return start_date_str, end_date_str
     
-    def _import_from_server(self, yearStart: int, yearEnd: int, interval: int, timeZone: str) -> pd.DataFrame:
+    def _import_from_server(self, year_start: int, year_end: int, interval: int, time_zone: str) -> pd.DataFrame:
         """
         Import data from NOAA source.
         
         Parameters
         ----------
-        yearStart : int
+        year_start : int
             Start year.
-        yearEnd : int
+        year_end : int
             End year.
         interval : int
             Interval in minutes.
-        timeZone : str
+        time_zone : str
             Time zone.
         
         Returns
@@ -499,10 +486,10 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
         pandas.DataFrame
             Imported data.
         """
-        print(f"Importing NOAA data for station {self._station_id} from {yearStart} to {yearEnd}")
+        print(f"Importing NOAA data for station {self._station_id} from {year_start} to {year_end}")
         
         # Get date bounds for API call
-        start_date, end_date = self._get_date_bounds(yearStart, yearEnd)
+        start_date, end_date = self._get_date_bounds(year_start, year_end)
         
         print(f"API date range (5 extra days either end): {start_date} to {end_date}")
         
@@ -560,9 +547,6 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
             except:
                 pass
         
-        # Convert units and fix dimensions
-        data = self._fix_dimensions(data)
-        
         # add LocalTime as a first column
         if self.station is not None and hasattr(self.station, 'timezone_name'):
             station_tz = self.station.timezone_name
@@ -573,89 +557,6 @@ class NOAAWeatherDataImporter(WeatherDataImporter):
 
         
         return data
-    
-    def _fix_dimensions(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Fix dimensions and convert units for NOAA data.
-        
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            Raw NOAA data.
-            
-        Returns
-        -------
-        pandas.DataFrame
-            Processed data with fixed dimensions and units.
-        """
-        # Make a copy to avoid modifying the original
-        df = data.copy()
-        
-        # Define fields that need to be scaled by 0.1
-        scale_by_tenth = [
-            'WindSpeed',              # 0.1 m/s to m/s
-            'DryBulbTemperature',     # 0.1 °C to °C
-            'DewPointTemperature',    # 0.1 °C to °C
-            'SeaLevelPressure',       # 0.1 hPa to hPa
-            'RainCumulative'          # 0.1 mm to mm
-        ]
-        
-        # Apply scaling to all fields that exist in the dataframe
-        for field in scale_by_tenth:
-            if field in df.columns:
-                df[field] = round(df[field].astype(float) * 0.1, 2)
-        
-        # Set default values for fields that might be missing
-        default_nan_fields = [
-            'CloudOktas', 'RainCumulative', 'OC1_0', 'MW1_0', 
-            'MW1_1', 'AJ1_0', 'RH1_2', 'GA1_0'
-        ]
-        
-        for field in default_nan_fields:
-            if field not in df.columns:
-                df[field] = np.nan
-        
-        return df
-    
-    def _fix_dimensions1(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Fix dimensions and convert units for NOAA data.
-        
-        Parameters
-        ----------
-        data : pandas.DataFrame
-            Raw NOAA data.
-            
-        Returns
-        -------
-        pandas.DataFrame
-            Processed data with fixed dimensions and units.
-        """
-        # Make a copy to avoid modifying the original
-        df = data.copy()
-        
-        print('speed before: ', df['WindSpeed'].head())
-        # Convert wind speed from tenths of meters per second to km/h
-        if 'WindSpeed' in df.columns:
-            df['WindSpeed'] = df['WindSpeed'].astype(float) * 0.1 * 3.6  # 0.1 m/s to km/h
-            print('speed after: ', df['WindSpeed'].head())
-        # Convert temperature from tenths of degrees Celsius
-        if 'DryBulbTemperature' in df.columns:
-            df['DryBulbTemperature'] = df['DryBulbTemperature'].astype(float) * 0.1
-        
-        # Convert dew point from tenths of degrees Celsius
-        if 'DewPointTemperature' in df.columns:
-            df['DewPointTemperature'] = df['DewPointTemperature'].astype(float) * 0.1
-        
-        # Convert sea level pressure from tenths of hPa
-        if 'SeaLevelPressure' in df.columns:
-            df['SeaLevelPressure'] = df['SeaLevelPressure'].astype(float) * 0.1
-        
-        # Convert visibility from meters to kilometers
-        if 'Visibility' in df.columns:
-            df['Visibility'] = df['Visibility'].astype(float) / 1000
-        
-        return df
     
     def _make_api_request(self, url: str, max_retries: int = 3) -> Optional[pd.DataFrame]:
         """

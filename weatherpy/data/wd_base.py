@@ -15,7 +15,7 @@ from .wd_stations import WeatherStation
 class WeatherData:
     """Base class for weather data operations."""
     
-    def __init__(self, data: pd.DataFrame, station: Optional[WeatherStation] = None, 
+    def __init__(self, data: Optional[pd.DataFrame] = None, station: Optional[WeatherStation] = None, 
                  data_type: Optional[str] = None, interval: Optional[int] = None):
         """
         Initialize with weather data.
@@ -31,7 +31,7 @@ class WeatherData:
         interval : Optional[int], optional
             Data recording interval in minutes (1, 10, 30, 60), by default None
         """
-        self._data = data.copy()  # Store as protected attribute
+        self._data = data.copy() if data is not None else pd.DataFrame()  # Store as protected attribute
         self._station = station
         self._data_type = data_type  # Data source type (BOM, NOAA, etc.)
         self._interval = interval  # Data interval in minutes
@@ -45,7 +45,7 @@ class WeatherData:
         
         # Initialize operation log
         self._operations_log = []
-        self._log_operation("Initialize", {"data_type": data_type, "interval": interval})
+        self._log_operation("System", "Initialize", {"data_type": data_type, "interval": interval})
         
         # Update all data-driven attributes
         self._update_data_attributes()
@@ -72,24 +72,36 @@ class WeatherData:
         # Data summary statistics (can be expensive, so only compute if needed)
         self._summary = None
     
-    def _log_operation(self, operation_name: str, parameters: Dict[str, Any] = None):
+    def _log_operation(self, operation_class, operation_method, inputs=None, outputs=None):
         """
-        Log an operation applied to the data.
+        Log an operation performed on the weather data.
         
         Parameters
         ----------
-        operation_name : str
-            Name of the operation
-        parameters : Dict[str, Any], optional
-            Parameters used in the operation, by default None
+        operation_class : str
+            The main class that performed the operation (e.g., 'Unifier', 'Cleaner', 'Corrector')
+        operation_method : str
+            The specific method/function used (e.g., 'round_wind_direction', 'clean_invalid')
+        inputs : dict, optional
+            Input parameters used for the operation, by default None
+        outputs : dict, optional
+            Output results from the operation (shape, rows affected, etc.), by default None
         """
+        if inputs is None:
+            inputs = {}
+        if outputs is None:
+            outputs = {}
+        
         timestamp = datetime.now().isoformat()
-        log_entry = {
-            "timestamp": timestamp,
-            "operation": operation_name,
-            "parameters": parameters or {}
+        operation_log = {
+            'timestamp': timestamp,
+            'class': operation_class,
+            'method': operation_method,
+            'inputs': inputs,
+            'outputs': outputs
         }
-        self._operations_log.append(log_entry)
+        
+        self._operations_log.append(operation_log)
     
     @property
     def operations_log(self) -> List[Dict[str, Any]]:
@@ -126,7 +138,6 @@ class WeatherData:
             New weather data DataFrame
         """
         self._data = new_data.copy()
-        self._log_operation("UpdateData", {"shape": new_data.shape})
         self._update_data_attributes()  # Update all data-driven attributes
     
     @property
@@ -512,7 +523,50 @@ class WeatherData:
         except Exception as e:
             logging.warning(f"Error loading metadata: {e}")
     
-    def unify(self, additional_columns: Optional[List[str]] = None) -> 'WeatherData':
+    def import_data(self, station_id: str, **kwargs) -> 'WeatherData':
+        """
+        Import weather data using the appropriate importer class.
+        
+        Parameters
+        ----------
+        station_id : str
+            The station ID for the data source.
+        **kwargs : dict
+            Additional parameters for the importer.
+        
+        Returns
+        -------
+        WeatherData
+            The WeatherData object with imported data.
+        """
+        from .wd_importer import BOMWeatherDataImporter, NOAAWeatherDataImporter
+        
+        # Determine the data type based on the length of the station ID
+        if len(station_id) == 6:
+            data_type = 'BOM'
+            importer = BOMWeatherDataImporter(station_id, **kwargs)
+        elif len(station_id) > 10:
+            data_type = 'NOAA'
+            importer = NOAAWeatherDataImporter(station_id, **kwargs)
+        else:
+            raise ValueError("Invalid station ID length. Must be 6 for BOM or more than 10 for NOAA.")
+    
+        
+        # Import the data
+        imported_data = importer.import_data()
+        
+        # Update the current WeatherData instance with the imported data
+        self.data = imported_data.data
+        self.station = imported_data.station
+        self.data_type = data_type
+        
+        # Get the interval from the importer, not from imported_data
+        # This ensures we use the default interval set in the importer
+        self.interval = importer.interval
+        
+        return self
+    
+    def unify(self, additional_columns: Optional[List[str]] = None, inplace: bool = True) -> 'WeatherData':
         """
         Unify this weather data by selecting specific columns.
         
@@ -523,28 +577,32 @@ class WeatherData:
         ----------
         additional_columns : Optional[List[str]], optional
             Additional columns to include beyond the standard columns, by default None
+        inplace : bool, optional
+            If True, modify the data in place. Otherwise, return a new WeatherData object.
             
         Returns
         -------
         WeatherData
-            Weather data object with selected columns
-            
-        Raises
-        ------
-        ImportError
-            If WeatherDataUnifier is not available
+            The modified WeatherData object (self if inplace=True, otherwise a new object)
         """
         try:
-            from .wd_unifier import WeatherDataUnifier
+            from .wd_unifier import WeatherDataUnifier, BOMWeatherDataUnifier, NOAAWeatherDataUnifier
         except ImportError:
             raise ImportError("WeatherDataUnifier is not available. Make sure wd_unifier.py is in the same package.")
         
         # Store original columns for logging
         original_cols = list(self._data.columns)
         
-        # Create unifier and apply unification
-        unifier = WeatherDataUnifier()
-        unifier.unify(self, additional_columns=additional_columns)
+        # Determine the appropriate unifier based on data_type
+        if self._data_type == 'BOM':
+            unifier = BOMWeatherDataUnifier()
+        elif self._data_type == 'NOAA':
+            unifier = NOAAWeatherDataUnifier()
+        else:
+            unifier = WeatherDataUnifier()
+        
+        # Apply unification
+        unified_data = unifier.unify_data(self, additional_columns=additional_columns, inplace=inplace)
         
         # Log the operation
         self._log_operation("Unify", {
@@ -552,4 +610,87 @@ class WeatherData:
             "columns_after": list(self._data.columns)
         })
         
-        return self
+        return unified_data
+
+    def clean(
+        self,
+        clean_invalid: bool = True,
+        invalid_columns: Optional[List[str]] = None,
+        clean_threshold: bool = True,
+        thresholds: Optional[Dict[str, Tuple[float, float]]] = None,
+        clean_duplicates: bool = True,
+        interpolate_missing: bool = False,
+        clean_ranked_rows: bool = True,
+        clean_VC_filter: bool = True,
+        clean_storms: bool = True,
+        inplace: bool = True
+    ) -> 'WeatherData':
+        """
+        Clean the weather data using the appropriate cleaner class.
+        
+        Parameters
+        ----------
+        clean_invalid : bool, optional
+            Whether to clean invalid values, by default True
+        invalid_columns : List[str], optional
+            Columns to clean for invalid values, by default None
+        clean_threshold : bool, optional
+            Whether to clean values outside thresholds, by default True
+        thresholds : Dict[str, Tuple[float, float]], optional
+            Thresholds for cleaning, by default None
+        clean_duplicates : bool, optional
+            Whether to clean duplicate rows, by default True
+        interpolate_missing : bool, optional
+            Whether to interpolate remaining missing values, by default False
+        clean_ranked_rows : bool, optional
+            Whether to clean ranked rows, by default True
+        clean_VC_filter : bool, optional
+            Whether to clean variable/changeable weather codes, by default True
+        clean_storms : bool, optional
+            Whether to clean storm data, by default True
+        inplace : bool, optional
+            If True, modify the data in place. Otherwise, return a new WeatherData object.
+            
+        Returns
+        -------
+        WeatherData
+            The cleaned WeatherData object (self if inplace=True, otherwise a new object)
+        """
+        try:
+            from .wd_cleaner import BOMDataCleaner, NOAADataCleaner
+        except ImportError:
+            raise ImportError("WeatherDataCleaner classes are not available. Make sure wd_cleaner.py is in the same package.")
+        
+        # Determine the appropriate cleaner based on data_type
+        if self._data_type == 'BOM':
+            cleaner = BOMDataCleaner(self)
+            # Construct arguments for BOMDataCleaner
+            cleaner_args = {
+                'clean_invalid': clean_invalid,
+                'invalid_columns': invalid_columns,
+                'clean_threshold': clean_threshold,
+                'thresholds': thresholds,
+                'clean_duplicates': clean_duplicates,
+                'interpolate_missing': interpolate_missing,
+                'inplace': inplace
+            }
+        elif self._data_type == 'NOAA':
+            cleaner = NOAADataCleaner(self)
+            # Construct arguments for NOAADataCleaner
+            cleaner_args = {
+                'clean_invalid': clean_invalid,
+                'invalid_columns': invalid_columns,
+                'clean_threshold': clean_threshold,
+                'thresholds': thresholds,
+                'clean_duplicates': clean_duplicates,
+                'interpolate_missing': interpolate_missing,
+                'clean_ranked_rows': clean_ranked_rows,
+                'clean_VC_filter': clean_VC_filter,
+                'clean_storms': clean_storms,
+                'inplace': inplace
+            }
+        else:
+            raise ValueError(f"Unsupported data type: {self._data_type}")
+        
+        # Apply cleaning and return the result
+        return cleaner.clean_data(**cleaner_args)
